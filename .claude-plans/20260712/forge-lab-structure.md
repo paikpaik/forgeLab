@@ -1,3 +1,27 @@
+## 플랜 실행 이력
+
+### 완료: 2026-07-12
+
+**결과**: 성공 (계획 범위 + 검증 중 발견한 추가 수정 포함)
+
+**실제 변경 파일**:
+- `services/waiting-room/{package.json,tsconfig.json,Dockerfile,docker-compose.yml,.env.example,.npmrc}` — 계획대로 생성
+- `services/waiting-room/src/{main.ts,app.module.ts}` — health 체크는 커스텀 컨트롤러 대신 node-forge의 `HealthModule`(+ `createRedisHealthChecker`)을 그대로 사용 (계획에는 "health 모듈" 골격만 있었는데, node-forge가 이미 제공해서 재사용으로 단순화)
+- `dashboard/{package.json,tsconfig.json,src/*,public/index.html}` — 계획대로 생성
+- `services/waiting-room/Dockerfile` — **계획에 없던 수정**: 최초엔 `ARG NODE_AUTH_TOKEN` + `echo`로 넣었는데, 빌드 로그에 토큰이 평문 노출되는 걸 실제로 발견해서 BuildKit `--mount=type=secret`로 교체. `docker-compose.yml`도 `args` 대신 `secrets:` 블록으로 변경
+- `services/waiting-room/docker-compose.yml` — `HOST_PORT` 환경변수로 호스트 포트를 바꿀 수 있게 추가 (로컬 3000번 포트 충돌 대응)
+- `dashboard/package.json` — `@fastify/static`을 `^7.0.4` → `^8.3.0`으로 조정 (fastify 5와 버전 불일치로 기동 실패했던 것 수정)
+
+**계획과의 차이**:
+- Docker 시크릿 취급 방식이 계획에 전혀 없었는데, 실제 배포 검증 중 토큰 노출을 발견해서 추가됨 (사용자가 토큰 재발급함)
+- `@fastify/static` 버전 계획 당시엔 확인 안 했던 fastify 5 비호환 이슈 발견, 즉시 수정
+- HealthModule을 직접 만들지 않고 node-forge 것을 재사용 — 계획보다 코드가 줄어듦
+
+**잔존 작업**:
+- 대기열 비즈니스 로직은 `waiting-room-queue-logic.md` 플랜으로 분리 완료 (별도 실행 이력 참고)
+
+---
+
 # forge-lab-structure — waiting-room(NestJS) + dashboard(Docker Compose 오케스트레이션) 초기 스캐폴딩
 
 ## 목표

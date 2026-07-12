@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>forge-lab dashboard</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; background: #0b0c10; color: #e5e7eb; }
+  h1 { font-size: 1.25rem; }
+  .card { border: 1px solid #2b2f3a; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; background: #14161c; }
+  .card h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+  .row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+  button { padding: 0.4rem 0.8rem; border-radius: 6px; border: 1px solid #3b3f4c; background: #1f2230; color: #e5e7eb; cursor: pointer; }
+  button:hover { background: #2b2f3a; }
+  button.watching { background: #2f6f4f; border-color: #3f9f6f; }
+  input[type="number"] { width: 5.5rem; padding: 0.3rem 0.5rem; border-radius: 6px; border: 1px solid #3b3f4c; background: #0b0c10; color: #e5e7eb; }
+  label { font-size: 0.85rem; color: #9ca3af; display: flex; align-items: center; gap: 0.3rem; }
+  pre { white-space: pre-wrap; background: #0b0c10; padding: 0.5rem; border-radius: 6px; max-height: 320px; overflow: auto; }
+  .empty { color: #9ca3af; }
+</style>
+</head>
+<body>
+  <h1>forge-lab dashboard</h1>
+  <div id="services" class="empty">불러오는 중…</div>
+
+  <script>
+    const watchTimers = {};
+
+    async function fetchJson(url, options) {
+      const res = await fetch(url, options);
+      return res.json();
+    }
+
+    function renderOutput(name, data) {
+      const pre = document.getElementById("output-" + name);
+      if (pre) pre.textContent = JSON.stringify(data, null, 2);
+    }
+
+    async function runAction(name, action) {
+      const method = action === "status" ? "GET" : "POST";
+      const data = await fetchJson("/api/services/" + name + "/" + action, { method });
+      renderOutput(name, data);
+    }
+
+    async function runSeed(name) {
+      const count = Number(document.getElementById("seed-count-" + name).value) || undefined;
+      const durationMs = Number(document.getElementById("seed-duration-" + name).value) || undefined;
+      const data = await fetchJson("/api/services/" + name + "/seed", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ count, durationMs }),
+      });
+      renderOutput(name, data);
+    }
+
+    // watchUrl은 서비스가 forge-lab.json에 선언한 값을 그대로 폴링만 한다 — dashboard는
+    // 그 응답이 "대기열"인지 뭔지 모른다. 그냥 JSON을 그대로 찍어 보여준다.
+    function toggleWatch(name, watchUrl, btn) {
+      if (watchTimers[name]) {
+        clearInterval(watchTimers[name]);
+        delete watchTimers[name];
+        btn.textContent = "Watch";
+        btn.classList.remove("watching");
+        return;
+      }
+
+      const poll = async () => {
+        try {
+          const res = await fetch(watchUrl);
+          renderOutput(name, await res.json());
+        } catch (err) {
+          renderOutput(name, { error: String(err) });
+        }
+      };
+      poll();
+      watchTimers[name] = setInterval(poll, 1000);
+      btn.textContent = "Watching… (끄려면 다시 클릭)";
+      btn.classList.add("watching");
+    }
+
+    async function init() {
+      const services = await fetchJson("/api/services");
+      const container = document.getElementById("services");
+
+      if (services.length === 0) {
+        container.className = "empty";
+        container.textContent = "등록된 서비스가 없습니다 (services/*/docker-compose.yml 확인)";
+        return;
+      }
+
+      container.className = "";
+      container.innerHTML = services
+        .map((s) => {
+          const watchBtn = s.watchUrl
+            ? '<button data-name="' + s.name + '" data-action="watch">Watch</button>'
+            : "";
+          const seedInputs = '<label>인원 <input type="number" id="seed-count-' + s.name + '" placeholder="50" min="1"></label>' +
+            '<label>분산(ms) <input type="number" id="seed-duration-' + s.name + '" placeholder="0" min="0"></label>';
+          return (
+            '<div class="card">' +
+            "<h2>" + s.name + "</h2>" +
+            '<div class="row">' +
+            '<button data-name="' + s.name + '" data-action="up">Up</button>' +
+            '<button data-name="' + s.name + '" data-action="down">Down</button>' +
+            '<button data-name="' + s.name + '" data-action="status">Status</button>' +
+            watchBtn +
+            "</div>" +
+            '<div class="row">' +
+            seedInputs +
+            '<button data-name="' + s.name + '" data-action="seed">Seed</button>' +
+            "</div>" +
+            '<pre id="output-' + s.name + '"></pre>' +
+            "</div>"
+          );
+        })
+        .join("");
+
+      container.querySelectorAll('button[data-action="watch"]').forEach((btn) => {
+        const service = services.find((s) => s.name === btn.dataset.name);
+        btn.addEventListener("click", () => toggleWatch(service.name, service.watchUrl, btn));
+      });
+
+      container.querySelectorAll('button[data-action="seed"]').forEach((btn) => {
+        btn.addEventListener("click", () => runSeed(btn.dataset.name));
+      });
+
+      container.querySelectorAll('button[data-action="up"], button[data-action="down"], button[data-action="status"]').forEach((btn) => {
+        btn.addEventListener("click", () => runAction(btn.dataset.name, btn.dataset.action));
+      });
+    }
+
+    init();
+  </script>
+</body>
+</html>

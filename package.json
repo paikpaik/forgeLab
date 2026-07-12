@@ -4,5 +4,8 @@
   "workspaces": [
     "services/*",
     "dashboard"
-  ]
+  ],
+  "scripts": {
+    "dev": "npm run dev -w dashboard"
+  }
 }
