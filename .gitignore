@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.env.*
+
+# node-forge, kafka-forge 참고용 클론 (독립 git 레포, 읽기 전용)
+/forge/
