@@ -23,4 +23,6 @@ proposals/
 
 ## 대시보드
 
-`dashboard/`는 `services/` 아래 모든 실험을 한 화면에서 확인하기 위한 관리 UI다. 개별 실험의 비즈니스 로직을 갖지 않고, 각 서비스의 실행/중지, 데이터 주입 같은 운영 동작을 오케스트레이션하는 역할만 맡는다.
+`dashboard/`는 `services/` 아래 모든 실험을 한 화면에서 확인하기 위한 관리 UI다. 개별 실험의 비즈니스 로직을 갖지 않는다 — dashboard가 직접 소유하는 건 Up/Down/Status(Docker 라이프사이클, 모든 서비스에 공통)뿐이다.
+
+서비스별로 다른 기능/화면(데이터 주입, 상태 시각화 등)은 dashboard 코드에 넣지 않는다. 대신 서비스가 자기 정적 페이지를 직접 서빙하고, `services/<name>/forge-lab.json`에 `{ "panelUrl": "http://localhost:<port>/<page>" }`를 선언하면 dashboard가 해당 서비스 탭 안에 iframe으로 그대로 띄운다. dashboard는 그 페이지 안에서 뭘 하는지 전혀 모른 채로 링크만 전달한다 — 새 실험을 추가할 때마다 dashboard 코드를 고칠 필요가 없게 하기 위함이다.

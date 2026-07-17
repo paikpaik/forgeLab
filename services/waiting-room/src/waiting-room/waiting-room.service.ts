@@ -63,4 +63,15 @@ export class WaitingRoomService {
       waiting: entries.map((entry, index) => ({ userId: entry.member, position: index + 1 })),
     };
   }
+
+  /**
+   * 대기열과 해당 room의 admitted 키를 전부 지운다. 반복 테스트할 때 매번 컨테이너를
+   * 재시작하지 않고 깨끗한 상태로 되돌리기 위한 용도 (테스트/데모 전용, 운영 API 아님).
+   */
+  async reset(roomId: string): Promise<void> {
+    const admittedKeys = await this.redis.scanKeys(admittedKey(roomId, "*"));
+    const keysToDelete = [queueKey(roomId), ...admittedKeys];
+    await this.redis.del(...keysToDelete);
+    this.metrics.queueLength.set({ roomId }, 0);
+  }
 }

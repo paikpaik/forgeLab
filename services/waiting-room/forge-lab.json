@@ -1,3 +1,4 @@
 {
-  "watchUrl": "http://localhost:3000/rooms/default/waiting-users"
+  "panelUrl": "http://localhost:3000/panel.html",
+  "architectureDoc": "ARCHITECTURE.md"
 }

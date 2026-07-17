@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { getService, listServices } from "../registry";
-import { composeDown, composeSeed, composeStatus, composeUp } from "../docker-compose";
+import { composeDown, composeStatus, composeUp } from "../docker-compose";
 
 function requireService(name: string, reply: FastifyReply) {
   const service = getService(name);
@@ -13,8 +14,21 @@ function requireService(name: string, reply: FastifyReply) {
 
 export async function serviceRoutes(app: FastifyInstance): Promise<void> {
   app.get("/services", async () =>
-    listServices().map((s) => ({ name: s.name, watchUrl: s.watchUrl })),
+    listServices().map((s) => ({
+      name: s.name,
+      panelUrl: s.panelUrl,
+      hasArchitectureDoc: Boolean(s.architectureDocPath),
+    })),
   );
+
+  app.get<{ Params: { name: string } }>("/services/:name/architecture", async (req, reply) => {
+    const service = requireService(req.params.name, reply);
+    if (!service) return;
+    if (!service.architectureDocPath) {
+      return reply.code(404).send({ error: `${req.params.name}에는 아키텍처 문서가 없습니다` });
+    }
+    return { content: readFileSync(service.architectureDocPath, "utf8") };
+  });
 
   app.get<{ Params: { name: string } }>("/services/:name/status", async (req, reply) => {
     const service = requireService(req.params.name, reply);
@@ -45,23 +59,4 @@ export async function serviceRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(500).send({ error: (err as Error).message });
     }
   });
-
-  app.post<{ Params: { name: string }; Body: { count?: number; durationMs?: number } }>(
-    "/services/:name/seed",
-    async (req, reply) => {
-      const service = requireService(req.params.name, reply);
-      if (!service) return;
-
-      const { count, durationMs } = req.body ?? {};
-      const env: Record<string, string> = {};
-      if (Number.isFinite(count)) env.SEED_COUNT = String(count);
-      if (Number.isFinite(durationMs)) env.SEED_DURATION_MS = String(durationMs);
-
-      try {
-        return { output: await composeSeed(service.composeFile, env) };
-      } catch (err) {
-        return reply.code(502).send({ error: `seed 실행 실패: ${(err as Error).message}` });
-      }
-    },
-  );
 }

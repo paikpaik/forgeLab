@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Post, UseInterceptors } from "@nestjs/common";
 import { ResponseInterceptor } from "@paikpaik/node-forge/response/nestjs";
 import { WaitingRoomService } from "./waiting-room.service";
 import { RegisterWaitingUserDto } from "./dto/register-waiting-user.dto";
@@ -28,5 +28,10 @@ export class WaitingRoomController {
     @Param("userId") userId: string,
   ): Promise<WaitingStatusDto> {
     return this.waitingRoomService.getStatus(roomId, userId);
+  }
+
+  @Delete()
+  reset(@Param("roomId") roomId: string): Promise<void> {
+    return this.waitingRoomService.reset(roomId);
   }
 }

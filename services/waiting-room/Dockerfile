@@ -20,5 +20,6 @@ RUN --mount=type=secret,id=npm_token \
   && rm .npmrc
 COPY --from=build /app/dist ./dist
 COPY scripts ./scripts
+COPY public ./public
 EXPOSE 3000
 CMD ["node", "dist/main.js"]

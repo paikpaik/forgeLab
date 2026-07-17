@@ -2,6 +2,7 @@ import { join } from "node:path";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { serviceRoutes } from "./routes/services";
+import { docsRoutes } from "./routes/docs";
 
 async function main(): Promise<void> {
   const app = Fastify({ logger: true });
@@ -11,6 +12,7 @@ async function main(): Promise<void> {
     prefix: "/",
   });
   await app.register(serviceRoutes, { prefix: "/api" });
+  await app.register(docsRoutes, { prefix: "/api" });
 
   const port = Number(process.env.PORT ?? 4000);
   await app.listen({ port, host: "0.0.0.0" });

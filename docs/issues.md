@@ -1,0 +1,25 @@
+# forge 패키지 이슈 대응 이력
+
+forge-lab에서 `@paikpaik/node-forge`, `@paikpaik/kafka-forge`를 실 소비자로 검증하다가 발견한 문제와,
+그게 어느 버전에서 어떻게 반영됐는지 정리한다. 발견 → `proposals/<패키지>/`에 제안서 작성 →
+사용자가 해당 forge 레포에서 직접 수정/배포하는 흐름을 따른다 (forge-lab이 forge 소스를
+직접 고치지 않는다는 원칙, `.claude/rules/common/principles.md` 참고).
+
+## @paikpaik/node-forge
+
+| 버전 | 심각도 | 이슈 | 대응 |
+|---|---|---|---|
+| 1.0.2 | HIGH | tsup `splitting: false`로 엔트리마다(`core/index.js`, `response/nestjs/index.js` 등) `ForgeBizError` 클래스가 각각 따로 번들링되어, `ForgeExceptionFilter`의 `instanceof` 매칭이 실패 → 에러가 잡히지 않고 500으로 떨어짐 | `splitting: true`로 변경, 공유 청크로 클래스 단일화. `npm pack` 기반 스모크 테스트를 CI에 추가 |
+| 1.0.1 | HIGH | `package.json`의 `exports` 맵 전체(`.`, `./core`, `./response/nestjs` 등)가 `require` 조건에서 존재하지 않는 `.cjs` 파일을 가리켜, `require()`로는 어떤 서브패스도 로드 불가 | `require`는 실제 산출물(`.js`), `import`는 `.mjs`를 가리키도록 exports 맵 전면 수정 |
+| 1.0.1 | MEDIUM | `ResponseInterceptor`(성공 응답 `ok()` 래핑)는 있는데 짝이 되는 에러 필터가 없어서, 서비스마다 `ForgeBizError`→`fail()` 변환을 직접 구현해야 했음 | `response/nestjs`에 `ForgeExceptionFilter` 추가 (`HttpAdapterHost` 사용, Express/Fastify 어댑터 모두 지원) |
+| 1.0.1 | MEDIUM | `HealthModule.forRoot()`가 체커를 모듈 정의 시점에 동기적으로 받아서, `RedisModule`이 DI로 만든 `ForgeRedisClient` 인스턴스를 헬스체커가 재사용할 방법이 없었음 | `RedisModule`/`LoggerModule`과 동일한 `useFactory`/`inject` 패턴으로 `HealthModule.forRootAsync` 추가 |
+
+## @paikpaik/kafka-forge
+
+아직 forge-lab에서 실 소비자로 붙여본 적이 없어 발견된 이슈 없음 (waiting-room 1번째 실험은
+kafka-forge를 스코프 아웃함 — `docs/architecture.md` 참고).
+
+---
+
+이 문서는 `dashboard`의 **Issue** 탭에서 그대로 렌더링된다. 새로운 forge 이슈를 발견하면
+`proposals/<패키지>/`에 제안서를 먼저 쓰고, 실제로 반영/배포되면 이 표에 한 줄 추가한다.

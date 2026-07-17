@@ -34,6 +34,18 @@ curl localhost:3000/metrics
 admission은 `ADMISSION_INTERVAL_MS`(기본 5초)마다 서버 내부 스케줄러가 자동으로 상위
 `ADMISSION_BATCH_SIZE`명을 입장 허용 처리한다 — 별도로 트리거할 API는 없다.
 
+## 대기열 패널
+
+`http://localhost:3000/panel.html` — 브라우저에서 직접 열면 실제 대기열처럼 내 순번과 전체
+대기열을 실시간으로 볼 수 있다. "줄서기"로 직접 등록해보거나, 인원수/분산시간을 넣고 한 번에
+몰아서 등록해 콘서트 예매 같은 버스트 상황을 재현할 수 있다. `dashboard`(`../../dashboard`)를
+실행하면 waiting-room 탭 안에 이 패널이 그대로 embed된다 (`forge-lab.json`의 `panelUrl`).
+
+CLI로 같은 걸 하고 싶으면(브라우저 없이):
+```bash
+docker compose exec -T -e SEED_COUNT=30 -e SEED_DURATION_MS=2000 app npm run seed
+```
+
 ## 스코프
 
 이번 실험은 단일 room(`ROOM_ID`), 단일 인스턴스를 전제로 한다. 멀티룸 스케줄링,

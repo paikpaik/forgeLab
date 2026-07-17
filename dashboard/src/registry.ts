@@ -5,8 +5,15 @@ export interface ServiceInfo {
   name: string;
   dir: string;
   composeFile: string;
-  /** 서비스가 forge-lab.json에 선언한, 실시간 상태를 볼 수 있는 조회용 URL (선택) */
-  watchUrl?: string;
+  /** 서비스가 forge-lab.json에 선언한, 자기 전용 UI를 보여줄 페이지 URL (선택) */
+  panelUrl?: string;
+  /** 서비스가 forge-lab.json에 선언한, 자기 아키텍처 문서의 절대 경로 (선택) */
+  architectureDocPath?: string;
+}
+
+interface ForgeLabConfig {
+  panelUrl?: unknown;
+  architectureDoc?: unknown;
 }
 
 /**
@@ -16,20 +23,28 @@ export interface ServiceInfo {
 const SERVICES_ROOT = process.env.SERVICES_ROOT ?? join(__dirname, "..", "..", "services");
 
 /**
- * 서비스 디렉토리의 forge-lab.json에서 watchUrl을 읽는다. dashboard는 이 URL이 뭘
- * 의미하는지 모른다 — 그냥 프론트엔드가 폴링할 링크로만 그대로 전달한다 (도메인 로직은
- * 항상 서비스 쪽 책임으로 남긴다).
+ * 서비스 디렉토리의 forge-lab.json을 읽는다. dashboard는 panelUrl/architectureDoc이 뭘
+ * 보여주는지 전혀 모른다 — panelUrl은 iframe으로 그대로 띄우고, architectureDoc은 파일을
+ * 읽어서 그대로 반환할 링크로만 다룬다. 서비스별 UI/문서 차이는 여기서 흡수하지 않고 각
+ * 서비스가 자기 쪽에서 알아서 관리한다.
  */
-function readWatchUrl(serviceDir: string): string | undefined {
+function readForgeLabConfig(serviceDir: string): ForgeLabConfig {
   const configFile = join(serviceDir, "forge-lab.json");
-  if (!existsSync(configFile)) return undefined;
+  if (!existsSync(configFile)) return {};
 
   try {
-    const config = JSON.parse(readFileSync(configFile, "utf8")) as { watchUrl?: unknown };
-    return typeof config.watchUrl === "string" ? config.watchUrl : undefined;
+    return JSON.parse(readFileSync(configFile, "utf8")) as ForgeLabConfig;
   } catch {
+    return {};
+  }
+}
+
+function resolveArchitectureDocPath(serviceDir: string, config: ForgeLabConfig): string | undefined {
+  if (typeof config.architectureDoc !== "string" || config.architectureDoc.includes("..")) {
     return undefined;
   }
+  const filePath = join(serviceDir, config.architectureDoc);
+  return existsSync(filePath) ? filePath : undefined;
 }
 
 export function listServices(): ServiceInfo[] {
@@ -39,11 +54,13 @@ export function listServices(): ServiceInfo[] {
     .filter((entry) => entry.isDirectory())
     .map((entry) => {
       const dir = join(SERVICES_ROOT, entry.name);
+      const config = readForgeLabConfig(dir);
       return {
         name: entry.name,
         dir,
         composeFile: join(dir, "docker-compose.yml"),
-        watchUrl: readWatchUrl(dir),
+        panelUrl: typeof config.panelUrl === "string" ? config.panelUrl : undefined,
+        architectureDocPath: resolveArchitectureDocPath(dir, config),
       };
     })
     .filter((service) => existsSync(service.composeFile));

@@ -1,16 +1,18 @@
 import "reflect-metadata";
+import { join } from "node:path";
 import { NestFactory, HttpAdapterHost } from "@nestjs/core";
+import type { NestExpressApplication } from "@nestjs/platform-express";
 import { ValidationPipe } from "@nestjs/common";
 import { ForgeExceptionFilter } from "@paikpaik/node-forge/response/nestjs";
 import { ForgeLoggerService } from "@paikpaik/node-forge/logger/nestjs";
 import { AppModule } from "./app.module";
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
 
-  // dashboard(localhost:4000)가 브라우저에서 이 서비스의 조회 API를 직접 폴링한다 —
-  // 로컬 실험 도구라 origin을 넓게 허용한다.
-  app.enableCors();
+  // public/panel.html — dashboard가 forge-lab.json의 panelUrl로 iframe에 그대로 띄운다.
+  // 같은 오리진에서 서빙하므로 panel.html의 fetch는 CORS 없이 이 서비스 API를 바로 호출한다.
+  app.useStaticAssets(join(__dirname, "..", "public"));
 
   app.useLogger(app.get(ForgeLoggerService));
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
