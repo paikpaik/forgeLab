@@ -126,24 +126,28 @@
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
-    // "compose ps --format json"은 개행으로 구분된 JSON 라인들이다. app 서비스 컨테이너가
-    // running 상태인지만 가볍게 파싱한다 — 실패하면(컨테이너가 아예 없으면) false로 취급.
+    // "compose ps --format json"은 개행으로 구분된 JSON 라인들이다. 서비스 이름을 특정
+    // 컨테이너 이름("app" 등)으로 가정하지 않고 — compose 파일에 정의된 컨테이너 수가
+    // 서비스마다 다를 수 있으므로(waiting-room=2개, live-ranking=4개 등) — 정의된 컨테이너가
+    // 하나라도 있고 전부 running일 때만 "실행 중"으로 판정한다. 하나라도 안 떠 있으면(빌드
+    // 실패, 크래시 등) 꺼져있음으로 취급해 사용자가 문제를 알아챌 수 있게 한다.
     async function isServiceRunning(name) {
       try {
         const data = await fetchJson("/api/services/" + name + "/status");
         if (!data.output) return false;
-        return data.output
+        const entries = data.output
           .trim()
           .split("\n")
           .filter(Boolean)
-          .some((line) => {
+          .map((line) => {
             try {
-              const entry = JSON.parse(line);
-              return entry.Service === "app" && entry.State === "running";
+              return JSON.parse(line);
             } catch {
-              return false;
+              return null;
             }
-          });
+          })
+          .filter(Boolean);
+        return entries.length > 0 && entries.every((entry) => entry.State === "running");
       } catch {
         return false;
       }

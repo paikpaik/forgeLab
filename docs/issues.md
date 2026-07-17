@@ -17,8 +17,14 @@ forge-lab에서 `@paikpaik/node-forge`, `@paikpaik/kafka-forge`를 실 소비자
 
 ## @paikpaik/kafka-forge
 
-아직 forge-lab에서 실 소비자로 붙여본 적이 없어 발견된 이슈 없음 (waiting-room 1번째 실험은
-kafka-forge를 스코프 아웃함 — `docs/architecture.md` 참고).
+| 버전 | 심각도 | 이슈 | 대응 |
+|---|---|---|---|
+| 1.0.2 | LOW (관측성 gap) | `IdempotencyStore`로 걸러낸 메시지 수를 재는 자체 지표(`kafka_forge_*`)가 없어서, 소비 서비스마다 각자 다른 이름/라벨로 직접 재야 했음 — 여러 서비스를 한 대시보드에서 비교하기 어려움 | `StandardConsumer`가 dedup으로 스킵될 때 `kafka_forge_deduped_total{topic,group}`을 자체적으로 증가시키도록 추가 |
+| 1.0.2 | LOW (관측성 gap) | 자체 지표(`producedTotal` 등)가 모듈 로드 시점에 고정 싱글턴 `metricsRegistry`에만 등록돼서, 소비 서비스가 자기 Registry(예: node-forge `ForgeMetrics.registry`)와 합쳐 하나의 `/metrics`로 노출할 방법이 없었음 — 서비스마다 `/metrics`와 `/metrics/kafka`를 따로 노출해야 했음 | `registerMetricsInto(registry)` export 추가 — 이미 만들어진 지표를 외부 Registry에도 등록. 하위 호환 유지(기존 `metricsRegistry` 노출은 그대로) |
+
+live-ranking(2번째 실험)에서 처음 kafka-forge를 실 소비자로 붙이며 위 두 건을 발견 → 제안 →
+반영까지 확인. 그 외 producer/consumer/재시도/DLQ/IdempotencyStore 인터페이스는 갭 없이
+그대로 사용 가능했음.
 
 ---
 

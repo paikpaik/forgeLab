@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>live-ranking</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, sans-serif;
+    margin: 0;
+    padding: 1.5rem;
+    background: #ffffff;
+    color: #1f2430;
+  }
+  h1 { font-size: 1.15rem; margin: 0 0 1rem; }
+  h2 { font-size: 0.95rem; margin: 0 0 0.75rem; color: #374151; font-weight: 700; }
+  p { line-height: 1.6; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+  .grid > .full { grid-column: 1 / -1; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+
+  .card { border: 1px solid #e2e5ea; border-radius: 10px; padding: 1rem 1.1rem; background: #fafbfc; }
+
+  button {
+    padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid #d1d5db;
+    background: #ffffff; color: #1f2430; cursor: pointer; font-size: 0.85rem;
+  }
+  button:hover { background: #f3f4f6; }
+  button.primary { background: #2f6feb; border-color: #2f6feb; color: #fff; }
+  button.primary:hover { background: #2660d1; }
+  button.danger { color: #b42318; border-color: #f3a6a0; }
+  button.danger:hover { background: #fef1f0; }
+
+  .my-score-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  .my-status .big { font-size: 1.6rem; font-weight: 700; }
+  .my-status .sub { color: #6b7280; font-size: 0.85rem; }
+
+  .board { display: flex; flex-direction: column; gap: 0.4rem; }
+  .board-row {
+    display: grid; grid-template-columns: 3rem 1fr 5rem; align-items: center;
+    gap: 0.5rem; padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid #e2e5ea;
+    font-size: 0.85rem;
+  }
+  .board-row.top3 { background: #fff4e0; border-color: #e0a030; }
+  .board-row.mine { background: #e6f4ea; border-color: #1a7f4b; font-weight: 700; }
+  .board-row .rank { color: #6b7280; font-weight: 700; }
+  .board-row .score { text-align: right; }
+
+  .form-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+  input[type="number"] { width: 5.5rem; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid #d1d5db; }
+  label { font-size: 0.8rem; color: #6b7280; display: flex; align-items: center; gap: 0.3rem; }
+  .hint { font-size: 0.78rem; color: #9ca3af; margin-top: 0.4rem; }
+
+  .log { font-family: ui-monospace, monospace; font-size: 0.78rem; color: #4b5563; max-height: 10rem; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 0.15rem; }
+  .log .empty { color: #9ca3af; }
+
+  .guide ol { padding-left: 1.2rem; margin: 0; }
+  .guide li { margin-bottom: 0.5rem; }
+  .guide code { background: #eef0f3; border-radius: 4px; padding: 0.05rem 0.35rem; font-size: 0.85em; }
+</style>
+</head>
+<body>
+  <h1>live-ranking · 실시간 랭킹 패널</h1>
+
+  <div class="grid">
+    <div class="card">
+      <h2>내 점수</h2>
+      <div class="my-score-row">
+        <button class="primary" id="join-btn">참가하기</button>
+        <button id="score-btn" style="display:none">+10점 올리기</button>
+        <div class="my-status" id="my-status"><span class="sub">아직 참가하지 않았습니다</span></div>
+      </div>
+      <p class="hint" style="margin-bottom:0">점수는 HTTP로 직접 반영되지 않고, ingest(producer) → Kafka → aggregator(consumer)를 거쳐 Redis에 반영됩니다. 버튼을 누른 직후와 랭킹이 실제로 바뀌는 시점 사이에 약간의 지연이 있는 걸 확인하세요.</p>
+    </div>
+
+    <div class="card">
+      <h2>이벤트 시뮬레이션</h2>
+      <p class="hint" style="margin-top:0">여러 명이 동시에 점수를 올리는 상황을 8명의 봇으로 재현합니다.</p>
+      <div class="form-row">
+        <label>이벤트 수 <input type="number" id="burst-count" value="50" min="1" max="1000"></label>
+        <label>최대 델타 <input type="number" id="burst-max-delta" value="20" min="1" max="1000"></label>
+        <button id="burst-btn">한번에 발사</button>
+        <button class="danger" id="burst-stop-btn" style="display:none">중지</button>
+        <button class="danger" id="reset-btn">초기화</button>
+      </div>
+      <div class="hint" id="burst-log"></div>
+    </div>
+
+    <div class="card full">
+      <h2>전체 랭킹 (상위 10)</h2>
+      <div class="board" id="board"></div>
+    </div>
+
+    <div class="card full">
+      <h2>이벤트 로그</h2>
+      <div class="log" id="event-log"><div class="empty">아직 이벤트가 없습니다</div></div>
+    </div>
+
+    <div class="card full guide">
+      <h2>테스트 방법</h2>
+      <ol>
+        <li><strong>지연 확인</strong> — "참가하기" 후 "+10점 올리기"를 누르면 즉시 이벤트 로그에 "발행함"이 찍히지만, 전체 랭킹에 실제로 반영되는 건 Kafka consumer가 이벤트를 소비한 다음입니다(보통 1초 안쪽). 이 발행-반영 사이의 시간차가 이 실험의 핵심입니다.</li>
+        <li><strong>이벤트 시뮬레이션</strong> — "한번에 발사"를 누르면 8명의 봇에게 무작위 점수 이벤트가 쏟아지고, 랭킹이 실시간으로 뒤바뀌는 걸 볼 수 있습니다.</li>
+        <li><strong>멱등성 확인</strong> — 브라우저 콘솔에서 같은 <code>eventId</code>로 <code>/leaderboards/default/events</code>를 두 번 POST 해보세요. 점수가 두 번 반영되지 않고 한 번만 반영되는 걸 확인할 수 있습니다(Redis 기반 멱등성 저장소).</li>
+        <li><strong>초기화</strong> — 테스트를 반복하고 싶으면 "초기화" 버튼으로 랭킹을 전부 지우고 처음부터 다시 시작할 수 있습니다.</li>
+        <li><strong>관측 지표</strong> — aggregator의 <a href="/metrics" target="_blank" rel="noopener">/metrics</a>(반영/중복 카운터), <a href="/metrics/kafka" target="_blank" rel="noopener">/metrics/kafka</a>(consumer lag, DLQ 이동 수)에서 직접 확인할 수 있습니다.</li>
+      </ol>
+    </div>
+  </div>
+
+  <script>
+    // 이 패널은 aggregator(조회 API)가 서빙하지만, 이벤트 발행은 별도 프로세스인 ingest가
+    // 맡는다 — producer/consumer가 진짜 분리된 프로세스라는 걸 보여주기 위한 구조라 포트가
+    // 다르다(브라우저 입장에서는 cross-origin 요청이 되므로 ingest 쪽에 CORS를 열어둔다).
+    const LEADERBOARD_ID = "default";
+    const INGEST_BASE = "http://localhost:3100";
+    const BOT_IDS = Array.from({ length: 8 }, (_, i) => "bot-" + (i + 1));
+
+    let myUserId = null;
+    let lastScores = new Map();
+
+    function logEvent(text) {
+      const log = document.getElementById("event-log");
+      if (log.querySelector(".empty")) log.innerHTML = "";
+      const line = document.createElement("div");
+      const time = new Date().toLocaleTimeString("ko-KR", { hour12: false });
+      line.textContent = "[" + time + "] " + text;
+      log.prepend(line);
+      while (log.children.length > 50) log.removeChild(log.lastChild);
+    }
+
+    function renderMyStatus(rank, score) {
+      const el = document.getElementById("my-status");
+      if (!myUserId) {
+        el.innerHTML = '<span class="sub">아직 참가하지 않았습니다</span>';
+        return;
+      }
+      if (rank === null) {
+        el.innerHTML = '<span class="sub">' + myUserId + " — 아직 점수 없음</span>";
+        return;
+      }
+      el.innerHTML = '<div class="big">' + rank + "위</div><div class=\"sub\">" + myUserId + " · " + score + "점</div>";
+    }
+
+    async function submitEvent(userId, delta, eventId) {
+      const res = await fetch(INGEST_BASE + "/leaderboards/" + LEADERBOARD_ID + "/events", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(eventId ? { userId, delta, eventId } : { userId, delta }),
+      });
+      return res;
+    }
+
+    async function joinBoard() {
+      myUserId = "me-" + Math.random().toString(36).slice(2, 8);
+      document.getElementById("join-btn").style.display = "none";
+      document.getElementById("score-btn").style.display = "inline-block";
+      logEvent(myUserId + "로 참가");
+      await refreshMyStatus();
+    }
+
+    async function addMyScore() {
+      if (!myUserId) return;
+      await submitEvent(myUserId, 10);
+      logEvent(myUserId + " +10점 이벤트 발행함 (반영까지 잠시 대기)");
+    }
+
+    async function resetBoard() {
+      await fetch("/leaderboards/" + LEADERBOARD_ID, { method: "DELETE" });
+      myUserId = null;
+      lastScores = new Map();
+      document.getElementById("join-btn").style.display = "inline-block";
+      document.getElementById("score-btn").style.display = "none";
+      renderMyStatus(null, null);
+      logEvent("랭킹 초기화");
+      await refreshBoard();
+    }
+
+    async function refreshMyStatus() {
+      if (!myUserId) return renderMyStatus(null, null);
+      const res = await fetch("/leaderboards/" + LEADERBOARD_ID + "/users/" + myUserId);
+      const body = await res.json();
+      const data = body.data ?? { rank: null, score: null };
+      renderMyStatus(data.rank, data.score);
+    }
+
+    async function refreshBoard() {
+      const res = await fetch("/leaderboards/" + LEADERBOARD_ID + "/top?limit=10");
+      const body = await res.json();
+      const entries = body.data ?? [];
+
+      for (const entry of entries) {
+        const prev = lastScores.get(entry.userId);
+        if (prev !== undefined && prev !== entry.score) {
+          logEvent(entry.userId + " 반영됨: " + prev + " → " + entry.score);
+        }
+        lastScores.set(entry.userId, entry.score);
+      }
+
+      const board = document.getElementById("board");
+      board.innerHTML = entries
+        .map((entry) => {
+          const cls = ["board-row"];
+          if (entry.rank <= 3) cls.push("top3");
+          if (entry.userId === myUserId) cls.push("mine");
+          return (
+            '<div class="' + cls.join(" ") + '"><div class="rank">' + entry.rank +
+            "위</div><div>" + entry.userId + '</div><div class="score">' + entry.score + "점</div></div>"
+          );
+        })
+        .join("") || '<div class="hint">아직 랭킹에 아무도 없습니다</div>';
+
+      await refreshMyStatus();
+    }
+
+    // 봇들에게 무작위 점수 이벤트를 뿌린다 — 등록/제거 개념이 없는 누적형 점수라, waiting-room의
+    // 버스트처럼 "중지 시 되돌리기"가 필요 없다. 중지는 단순히 "앞으로 예약된 발사를 취소"하는
+    // 의미만 갖는다(이미 나간 이벤트는 그대로 반영되는 게 맞다 — 누적 점수라 취소할 이유가 없음).
+    let burstState = null;
+
+    function setBurstRunning(running) {
+      document.getElementById("burst-btn").disabled = running;
+      document.getElementById("burst-stop-btn").style.display = running ? "inline-block" : "none";
+    }
+
+    function stopBurst() {
+      if (!burstState) return;
+      burstState.cancelled = true;
+      burstState.timers.forEach((timer) => clearTimeout(timer));
+      burstState = null;
+      setBurstRunning(false);
+      logEvent("이벤트 시뮬레이션 중지 — 이미 발행된 이벤트는 그대로 반영됨");
+    }
+
+    function runBurst() {
+      if (burstState) return;
+
+      const count = Number(document.getElementById("burst-count").value) || 50;
+      const maxDelta = Number(document.getElementById("burst-max-delta").value) || 20;
+      const state = { cancelled: false, timers: [] };
+      burstState = state;
+      setBurstRunning(true);
+
+      const log = document.getElementById("burst-log");
+      log.textContent = "0/" + count + "건 발행 중…";
+      logEvent(count + "건 이벤트 시뮬레이션 시작");
+
+      let done = 0;
+      for (let i = 0; i < count; i++) {
+        const timer = setTimeout(async () => {
+          if (state.cancelled) return;
+          const userId = BOT_IDS[Math.floor(Math.random() * BOT_IDS.length)];
+          const delta = Math.floor(Math.random() * maxDelta) + 1;
+          await submitEvent(userId, delta).catch(() => {});
+          if (state.cancelled) return;
+          done++;
+          log.textContent = done + "/" + count + "건 발행됨";
+          if (done === count) {
+            logEvent(count + "건 이벤트 시뮬레이션 발행 완료 (반영은 잠시 뒤)");
+            burstState = null;
+            setBurstRunning(false);
+          }
+        }, (i * 20));
+        state.timers.push(timer);
+      }
+    }
+
+    document.getElementById("join-btn").addEventListener("click", joinBoard);
+    document.getElementById("score-btn").addEventListener("click", addMyScore);
+    document.getElementById("burst-btn").addEventListener("click", runBurst);
+    document.getElementById("burst-stop-btn").addEventListener("click", stopBurst);
+    document.getElementById("reset-btn").addEventListener("click", resetBoard);
+
+    refreshBoard();
+    setInterval(refreshBoard, 1000);
+  </script>
+</body>
+</html>
