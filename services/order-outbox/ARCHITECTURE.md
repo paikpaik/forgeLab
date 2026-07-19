@@ -30,7 +30,10 @@ flowchart TB
         DataSource.transaction()`"]
         PUB["`**OutboxPublisherService**
         @Interval(5초) → publishPending()`"]
-        STORE["`**TypeormOutboxStore**`"]
+        STORE["`**TypeormOutboxStore**
+        markFailed → 5회째 dead 격리`"]
+        DEADAPI["`**OutboxController**
+        GET /outbox/dead`"]
     end
 
     subgraph FUL["fulfillment : 3201 — NestJS (다운스트림 컨슈머)"]
@@ -61,7 +64,9 @@ flowchart TB
     PUB -->|fetchPending| STORE
     STORE --> OUTBOX
     PUB -->|publish| TOPIC
-    STORE -->|markPublished| OUTBOX
+    STORE -->|"markPublished / markFailed"| OUTBOX
+    DEADAPI -->|listDead| STORE
+    PANEL -->|"GET /outbox/dead"| DEADAPI
     TOPIC -->|subscribe| CONS
     CONS -->|"status='confirmed'"| ORDERS
 
@@ -76,7 +81,7 @@ flowchart TB
     classDef forgeNode fill:#f5f3ff,stroke:#7c3aed,stroke-width:1.5px,color:#4c1d95
 
     class U,PANEL entryNode
-    class OAPI,OSVC,PUB,STORE,CONS logicNode
+    class OAPI,OSVC,PUB,STORE,CONS,DEADAPI logicNode
     class ORDERS,OUTBOX dbNode
     class TOPIC kafkaNode
     class NF,KF forgeNode
@@ -91,6 +96,7 @@ flowchart TB
 | POST | `/orders` | 주문 생성. `{ item, amount }` — 주문 저장과 outbox 기록을 하나의 트랜잭션으로 커밋 |
 | GET | `/orders` | 최근 주문 목록. 각 항목에 `stage`(created/published/confirmed) 포함 |
 | GET | `/orders/:id` | 단건 조회 |
+| GET | `/outbox/dead` | dead-lettered outbox 레코드 목록/개수 — 발행 5회 연속 실패 시 격리된 레코드 확인용 |
 | GET | `/health` | Postgres + Kafka 연결 상태 (5초 캐싱) |
 | GET | `/metrics` | node-forge 기본 지표 + `order_outbox_orders_created_total` + kafka-forge 발행 지표 |
 | GET | `/panel.html` | 패널 UI (dashboard가 iframe으로 띄움) |
@@ -110,7 +116,7 @@ fulfillment는 별도 비즈니스 API가 없다 — api가 같은 Postgres를 �
 | 테이블 | 주요 컬럼 | 용도 |
 |---|---|---|
 | `orders` | `id`(app에서 uuid 생성), `item`, `amount`, `status`(pending/confirmed), `createdAt`, `confirmedAt`(nullable, ISO 문자열) | 주문 본체. `status`/`confirmedAt`은 fulfillment가 최초 1회만 세팅(재배달돼도 안 덮어씀) |
-| `outbox_records` | `id`, `topic`, `key`, `payload`(simple-json), `createdAt`, `publishedAt`(nullable, ISO 문자열) | kafka-forge `OutboxStore` 계약. `publishedAt`이 null이면 미발행 |
+| `outbox_records` | `id`, `topic`, `key`, `payload`(simple-json), `createdAt`, `publishedAt`(nullable, ISO 문자열), `attempts`(int, default 0), `lastError`(nullable), `deadAt`(nullable, ISO 문자열) | kafka-forge `OutboxStore` 계약. `publishedAt`이 null이면 미발행, `attempts`가 `OUTBOX_MAX_ATTEMPTS`(5)에 도달하면 `deadAt` 세팅 후 `fetchPending`에서 영구 제외(dead-letter) |
 
 패널의 3단계(`생성됨`/`발행됨`/`확인됨`)는 두 테이블을 조합해서 계산한다 —
 `orders.status`가 `confirmed`면 확인됨, 아니면 매칭되는 `outbox_records.publishedAt`이
@@ -135,7 +141,9 @@ fulfillment는 별도 비즈니스 API가 없다 — api가 같은 Postgres를 �
 | 컬럼 타입을 전부 명시 (`@Column("varchar")` 등, 타입 추론 생략형 안 씀) | vitest가 쓰는 esbuild 트랜스폼은 `emitDecoratorMetadata`를 방출하지 않아서, TypeORM이 리플렉션으로 타입을 추론하는 방식의 데코레이터는 테스트 환경에서 실패함 |
 | DLQ 관측성(전용 뷰어 UI) 재구현 안 함 | live-ranking에서 이미 검증된 기능이라 스코프 아웃, `StandardConsumer` 기본 재시도/DLQ만 사용 |
 | `synchronize: true` | 마이그레이션 도구 없이 엔티티로 테이블 자동 생성 — 랩 환경이라 이 정도로 충분(실 서비스라면 지양해야 하는 설정임을 인지) |
-| **(알려진 한계, 미해결)** kafka-forge `OutboxPublisher.publishPending()`의 배치 중 일부 실패 시 부분 재발행 가능성 | 소스 확인 결과, 배치로 여러 row를 발행하다가 하나라도 실패하면 그 전에 이미 성공한 것들도 `markPublished`가 호출되지 않고 그대로 예외가 던져진다 — 다음 폴링에서 이미 발행된 것들이 다시 발행(중복)될 수 있다. 이번 구현 스코프에서는 재현/수정하지 않고, 추후 냉정한 분석 대상으로 남겨둔다 |
+| ~~(알려진 한계, 미해결)~~ kafka-forge `OutboxPublisher.publishPending()`의 배치 중 일부 실패 시 부분 재발행/영구 블로킹 | **kafka-forge 1.0.5에서 해결.** 실제로 재현(포이즌 topic row 삽입 → `produced_total`이 5초마다 중복 증가, 뒤쪽 정상 row는 영구히 미발행)한 뒤 두 건의 제안서(`proposals/kafka-forge/20260719/`)를 작성해 반영시켰다: (1) 배치 중 한 건이 실패해도 이미 성공한 건들은 계속 `markPublished`하고 다음 row로 넘어가도록 수정, (2) `OutboxStore`에 선택적 `markFailed?(id, error)` 훅 추가. 아래 두 행 참고 |
+| `OUTBOX_MAX_ATTEMPTS`(5)·dead-letter 정책은 서비스가 소유, kafka-forge는 훅만 제공 | kafka-forge의 원칙("저장소 구현에 의존하지 않는다, 확장 지점은 인터페이스로만 제공") — `maxAttempts`/`markDead`를 `OutboxPublisher` 자체에 넣는 대신, `IdempotencyStore.claim`/`release`와 같은 선례를 따라 `markFailed` 훅 하나만 kafka-forge에 추가하고, "몇 번 실패하면 죽었다고 볼지"·"죽은 레코드를 어떻게 다룰지"는 전부 `TypeormOutboxStore`(이 서비스) 책임으로 뒀다 |
+| dead-letter 유발을 위한 전용 테스트 트리거(`OUTBOX_POISON_ITEM`) | 임의 topic을 직접 지정할 수 있는 API를 노출하는 대신, live-ranking의 `DLQ_TEST_USER_ID` 컨벤션과 동일하게 "특정 상품명(`__outbox-fail__`)으로 주문하면 서버가 내부적으로 유효하지 않은 topic을 넣는다"는 방식으로 재현 경로를 안전하게 제한 |
 | `orders.confirmedAt`은 fulfillment가 "이미 있으면 갱신 안 함" 조건으로 세팅 | 카프카 재배달로 같은 이벤트가 다시 처리돼도(핸들러 자체는 멱등이라 안전) `confirmedAt`이 재배달 시각으로 덮여쓰이면 "최초로 확인된 시각"이라는 관측 정보가 훼손된다 — `WHERE confirmedAt IS NULL` 조건으로 최초 1회만 기록 |
 | 패널 이벤트 로그는 폴링 snapshot이 아니라 서버가 내려주는 `publishedAt`/`confirmedAt` 실제 시각으로 재구성 | outbox 폴링 간격(5초)에 비해 발행→소비(카프카 컨슈머 반응)는 보통 수십~수백ms 안에 끝나서, 패널의 1초 폴링이 "발행됨" 상태를 거의 항상 놓친다(실측: 발행 12ms 뒤 확인됨). "지금 상태가 뭐냐"만 폴링해서 전이를 로그로 남기면 중간 단계가 통째로 빠질 수 있어서, 서버가 실제 발행/확인 시각을 함께 내려주고 클라이언트는 그 시각 기준으로 로그를 재구성한다 — 폴링 방식 자체는 그대로 두고(waiting-room/live-ranking과 동일 컨벤션), 폴링이 실어오는 정보만 풍부하게 만든 것 |
 
@@ -172,5 +180,51 @@ fulfillment는 별도 비즈니스 API가 없다 — api가 같은 Postgres를 �
 **검증**: 주문 생성 → 8초 후 조회 시 `publishedAt`/`confirmedAt`이 실제 값으로 채워지는 것
 확인(예시: 발행 08:57:29.108 → 확인 08:57:29.120, 12ms 차이). panel.html 반영 확인, vitest
 15개 유지하며 통과.
+
+### 후속 (2026-07-19) — kafka-forge 1.0.5 채택: outbox 부분 실패/영구 블로킹 수정 + dead-lettering
+
+"냉정하게 평가해달라"는 요청으로 `OutboxPublisher.publishPending()` 소스를 읽다가 발견한 버그를
+직접 재현: `docker exec ... psql`로 정상 row 1건 → 독성 topic row 1건 → 정상 row 1건을 순서대로
+삽입하고 api 컨테이너를 재시작해서 관찰한 결과,
+
+- `kafka_forge_produced_total`이 40초 동안 5씩 증가 — 앞쪽 정상 row가 5초마다 **중복 발행**됨
+  (배치 중 하나가 실패하면 그 이전에 이미 성공한 것도 `markPublished`가 호출되지 않고 예외가
+  던져졌기 때문)
+- `kafka_forge_produce_errors_total{topic="invalid topic name!!!"}`이 9까지 무한정 증가 —
+  재시도 제한 없음
+- 세 번째(뒤쪽) 정상 row는 테스트 기간 내내 `publishedAt`이 계속 null — 독성 row에 **영구히
+  막힘**(head-of-line blocking)
+
+이걸 근거로 두 건의 제안서를 작성해 알렸고, 사용자가 kafka-forge 1.0.5로 반영:
+- `20260719-outbox-publisher-partial-failure.md` — 배치 처리 루프가 개별 row 실패에 더 이상
+  `throw`하지 않고 로그만 남긴 채 계속 진행, 이미 성공한 건은 항상 `markPublished`
+- `20260719-outbox-store-mark-failed-hook.md` — `OutboxStore`에 선택적 `markFailed?(id, error)`
+  훅 추가 (정책은 전부 구현체 책임)
+
+이 서비스 쪽 구현:
+- `entities/outbox-record.entity.ts` — `attempts`(int, default 0), `lastError`(nullable),
+  `deadAt`(nullable, ISO 문자열) 컬럼 추가
+- `api/typeorm-outbox-store.ts` — `markFailed(id, error)`(5회째 `deadAt` 세팅), `listDead(limit)`
+  구현, `fetchPending`에서 `deadAt IS NULL` 조건 추가
+- `api/outbox.controller.ts` — `GET /outbox/dead` 신규
+- `api/orders.service.ts` — `item === OUTBOX_POISON_ITEM`이면 outbox row의 topic을 일부러
+  유효하지 않은 문자열(`OUTBOX_POISON_TOPIC`)로 저장
+- `public/panel.html` — "죽은 outbox 레코드" 카드(개수 + 목록) + "발행 실패 유발" 버튼 추가
+- 테스트 3건 추가(반복 실패 시 유지/5회째 dead 전이/존재하지 않는 id 무시) — 총 19개, 전부 통과
+
+**검증(2026-07-19, `docker compose up --build -d` 후 실제 컨테이너 대상)**: 사전 정상 주문 →
+포이즌 주문(`__outbox-fail__`) → 사후 정상 주문 순서로 3건 생성 후 25초 대기(5초 간격 ×
+`OUTBOX_MAX_ATTEMPTS`=5회) 결과,
+- 사전 주문: `stage: "confirmed"` 정상
+- 포이즌 주문: `stage: "created"`로 영구 고정(정상 동작), `GET /outbox/dead`에
+  `attempts: 5`, `lastError: "The request attempted to perform an operation on an invalid
+  topic"`, `deadAt` 세팅된 것 확인
+- **사후 주문도 `stage: "confirmed"`로 정상 처리** — 포이즌 레코드에 더 이상 막히지 않음(수정 전
+  버그였던 영구 블로킹 해소 확인)
+- `kafka_forge_produced_total{topic="order.created.v1"}` = 2 (사전+사후, 중복 없음),
+  `kafka_forge_produce_errors_total{topic="invalid topic name!!!"}` = 5 (정확히
+  `OUTBOX_MAX_ATTEMPTS`에서 멈추고 더 이상 증가하지 않음 — 무한 재시도 해소 확인)
+
+테스트 데이터는 검증 후 `TRUNCATE orders, outbox_records`로 정리.
 
 관련 플랜: `.claude-plans/20260719/order-outbox-pipeline.md` (실행 이력 포함).

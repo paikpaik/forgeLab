@@ -7,6 +7,7 @@ import { OrderEntity } from "../entities/order.entity";
 import { OutboxRecordEntity } from "../entities/outbox-record.entity";
 import { OrderCreated } from "../shared/order-created.contract";
 import type { OrderCreatedPayload } from "../shared/order-created.contract";
+import { OUTBOX_POISON_ITEM, OUTBOX_POISON_TOPIC } from "../shared/constants";
 import { OrdersMetrics } from "./orders.metrics";
 import type { CreateOrderDto } from "./dto/create-order.dto";
 
@@ -53,7 +54,10 @@ export class OrdersService {
 
       await manager.save(OutboxRecordEntity, {
         id: randomUUID(),
-        topic: OrderCreated.topic,
+        // panel.html의 "발행 실패 유발" 버튼이 이 상품명으로 주문하면, 일부러 유효하지 않은
+        // 토픽을 넣어서 OutboxPublisher의 markFailed/dead-lettering이 실제로 동작하는지
+        // raw SQL 없이도 확인할 수 있게 한다 — 정상 흐름과는 무관한 테스트/데모 전용 분기.
+        topic: dto.item === OUTBOX_POISON_ITEM ? OUTBOX_POISON_TOPIC : OrderCreated.topic,
         key: order.id,
         payload,
         publishedAt: null,

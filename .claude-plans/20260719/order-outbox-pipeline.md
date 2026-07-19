@@ -1,5 +1,51 @@
 ## 플랜 실행 이력
 
+### 후속: 2026-07-19 (kafka-forge 1.0.5 채택 — outbox 부분 실패/영구 블로킹 수정 + dead-lettering)
+
+"냉정하게 order-outbox를 평가하고 forge 모듈/패널 개선점을 파악해달라"는 요청으로
+`OutboxPublisher.publishPending()` 소스를 읽다가 배치 중 한 건 실패 시 그 이전 성공분도
+`markPublished` 안 되고 예외가 던져지는 구조를 발견 — 이론으로 끝내지 않고 `docker exec ...
+psql`로 정상 row/독성 topic row/정상 row를 순서대로 직접 삽입해 실제로 재현: 정상 앞 row가
+5초 폴링마다 중복 발행(`produced_total` 40초간 +5), 독성 row는 무한 재시도
+(`produce_errors_total` +9), 뒤쪽 정상 row는 테스트 기간 내내 미발행(영구 블로킹).
+
+사용자가 "실패건은 dlq로 가는 게 맞지 않냐"고 제안 → 제안서 2건 작성(부분 실패 수정은 순수
+버그 픽스, dead-letter는 `OutboxStore.markFailed?` 훅 하나만 추가하는 최소 설계로 — 정책
+전부는 저장소 책임에 위임, kafka-forge 자신의 "저장소 구현에 의존하지 않는다" 원칙과
+`IdempotencyStore.claim`/`release` 선례에 따라 이 방향을 추천, 사용자 승인) → 사용자가
+kafka-forge 1.0.5로 반영.
+
+**실제 변경 파일**:
+- `src/entities/outbox-record.entity.ts` — `attempts`(int, default 0), `lastError`(nullable),
+  `deadAt`(nullable, ISO 문자열) 컬럼 추가
+- `src/api/typeorm-outbox-store.ts` — `markFailed(id, error)`(5회째 `deadAt` 세팅),
+  `listDead(limit)` 신규, `fetchPending`에 `deadAt IS NULL` 조건 추가
+- `src/api/outbox.controller.ts` — 신규, `GET /outbox/dead`
+- `src/api/orders.service.ts`, `src/shared/constants.ts` — `OUTBOX_POISON_ITEM`/
+  `OUTBOX_POISON_TOPIC` 트리거 추가(live-ranking의 `DLQ_TEST_USER_ID` 컨벤션과 동일)
+- `src/api/typeorm-outbox-store.test.ts`, `orders.service.test.ts` — dead-lettering
+  테스트 3건 추가(총 19개)
+- `public/panel.html` — "죽은 outbox 레코드" 카드 + "발행 실패 유발" 버튼
+- `ARCHITECTURE.md` — mermaid에 `OutboxController`/dead 흐름 추가, 알려진 한계 행을 해결로
+  갱신, 설계 결정 2건 추가, 검증 이력 후속 섹션 추가
+- `docs/issues.md` — kafka-forge 1.0.5 이슈 2건(HIGH/MEDIUM) 추가
+
+**계획과의 차이**: 없음(사용자 요청 기반 후속 라운드, 별도 사전 계획 문서 없이 진행).
+
+**검증**: `docker compose up --build -d` 후 실제 컨테이너 대상으로 사전 정상 주문 → 포이즌
+주문 → 사후 정상 주문 순서로 3건 생성, 25초(5초 × `OUTBOX_MAX_ATTEMPTS`=5) 대기 후 확인 —
+사전/사후 주문 모두 `stage: "confirmed"`(사후 주문이 정상 처리됐다는 게 영구 블로킹 해소의
+직접 증거), 포이즌 주문은 `stage: "created"`로 고정 + `GET /outbox/dead`에 `attempts: 5`
+세팅 확인, `kafka_forge_produced_total` = 2(중복 없음), `kafka_forge_produce_errors_total` =
+5(정확히 MAX_ATTEMPTS에서 멈춤, 무한 재시도 해소). vitest 19개 전부 통과. 검증 후
+`TRUNCATE orders, outbox_records`로 테스트 데이터 정리.
+
+**잔존 작업**: 없음. (별도, 낮은 우선순위로 남겨둔 것: `OutboxPublisherService.flush()`에
+try/catch가 없어 예외가 NestJS Scheduler 레벨 로그로만 보임 — 애플리케이션 레벨의 깔끔한
+에러 로그가 아님. 이번 라운드 스코프 아님.)
+
+---
+
 ### 후속: 2026-07-19 (이벤트 로그가 "발행됨"을 건너뛰던 문제)
 
 사용자가 "3개 주문을 만들었는데 발행됨으로 안 가고 바로 확인됨으로 넘어간다"고 리포트.

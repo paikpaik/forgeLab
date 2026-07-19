@@ -29,4 +29,19 @@ export class OutboxRecordEntity {
   // 동작한다(테스트에서 SQLite in-memory를 그대로 쓸 수 있는 이유).
   @Column({ type: "varchar", nullable: true })
   publishedAt!: string | null;
+
+  // kafka-forge 1.0.5의 markFailed 훅으로 실패를 통보받으면 이 카운터를 올린다. 몇 번이면
+  // 포기할지(OUTBOX_MAX_ATTEMPTS)와 포기한 레코드를 어떻게 할지는 kafka-forge가 아니라
+  // 여기 store 쪽 정책이다.
+  @Column("int", { default: 0 })
+  attempts!: number;
+
+  @Column({ type: "varchar", nullable: true })
+  lastError!: string | null;
+
+  // null이 아니면 더 이상 재시도하지 않는 "죽은" 레코드 — fetchPending()이 제외시킨다.
+  // 발행 실패가 조용히 무한 재시도되기만 하고 아무 데도 안 보이면 안 되니, GET /outbox/dead로
+  // 확인할 수 있게 한다(live-ranking의 DLQ 로그와 같은 관측성 이유).
+  @Column({ type: "varchar", nullable: true })
+  deadAt!: string | null;
 }

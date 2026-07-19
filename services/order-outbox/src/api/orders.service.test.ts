@@ -5,6 +5,7 @@ import { createTestDataSource } from "../test-utils/create-test-data-source";
 import { OrderEntity } from "../entities/order.entity";
 import { OutboxRecordEntity } from "../entities/outbox-record.entity";
 import { OrderCreated } from "../shared/order-created.contract";
+import { OUTBOX_POISON_ITEM, OUTBOX_POISON_TOPIC } from "../shared/constants";
 import { OrdersService } from "./orders.service";
 import { OrdersMetrics } from "./orders.metrics";
 
@@ -44,6 +45,16 @@ describe("OrdersService.create", () => {
 
     const text = await metrics.ordersCreatedTotal.get();
     expect(text.values[0].value).toBe(1);
+  });
+
+  it("포이즌 상품명으로 주문하면 outbox row에 일부러 유효하지 않은 토픽을 넣는다", async () => {
+    dataSource = await createTestDataSource();
+    const { service } = createService(dataSource);
+
+    const { id } = await service.create({ item: OUTBOX_POISON_ITEM, amount: 1 });
+
+    const outboxRow = await dataSource.getRepository(OutboxRecordEntity).findOneBy({ key: id });
+    expect(outboxRow?.topic).toBe(OUTBOX_POISON_TOPIC);
   });
 });
 

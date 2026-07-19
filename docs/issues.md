@@ -27,10 +27,13 @@ forge-lab에서 `@paikpaik/node-forge`, `@paikpaik/kafka-forge`를 실 소비자
 | 1.0.4 | HIGH (데이터 정합성) | `claim`이 성공/실패를 구분하지 못해서, 재시도까지 다 실패해 DLQ로 간(한 번도 성공한 적 없는) 메시지도 영구히 선점된 상태로 남음 — 버그를 고치고 같은 메시지를 재발행해도 "이미 처리됨"으로 조용히 스킵되어, DLQ 재처리라는 가장 흔한 운영 패턴이 막힘 | `IdempotencyStore`에 선택적 `release(key)` 추가 — `claim`으로 선점했지만 재시도 소진 후 DLQ로 이동하면 `StandardConsumer`가 자동으로 `release`를 호출해 선점을 되돌림. 성공한 메시지는 `release`가 호출되지 않아 크래시 윈도우 보호는 그대로 유지 |
 | 1.0.4 | LOW (관측성/문서화) | `kafka_forge_consumed_total`이 이름만 보면 "성공 처리량"으로 읽히지만 실제로는 "성공+DLQ 이동 포함 시도 총량"이라 헷갈림 | `help` 문구 명확화 + 순수 성공 건수만 세는 `kafka_forge_handled_total` 신규 지표 추가 |
 | 1.0.4 | LOW (기능 gap/편의성) | `toDlqTopicName()`이 만드는 `<topic>.dlq`가 kafka-forge 자신의 토픽 네이밍 컨벤션을 어겨서, DLQ 토픽에 대한 `EventContract`를 `defineEvent()`로 만들 수 없었음(직접 리터럴로 우회 필요) | 원본 `EventContract`로부터 DLQ용 contract(envelope 스키마 자동 생성 포함)를 만들어주는 `defineDlqEvent()` 헬퍼 추가 |
+| 1.0.5 | HIGH (데이터 정합성) | `OutboxPublisher.publishPending()`이 배치 중 한 건이라도 실패하면 그 즉시 예외를 던져서, (a) 그 이전에 이미 성공한 row들도 `markPublished`가 호출되지 않아 다음 폴링에서 중복 발행되고 (b) 실패한 row 뒤에 있는 정상 row들은 영구히 발행 기회를 못 얻음(head-of-line blocking) — 정상/독성 row를 순서대로 DB에 직접 삽입해 실제로 재현: 정상 row가 5초마다 중복 발행(`produced_total` +5/40초), 독성 row는 무한 재시도, 세 번째 row는 테스트 기간 내내 미발행 | 배치 루프가 개별 row 실패에 더 이상 `throw`하지 않고 로그만 남긴 채 다음 row로 진행, 이미 성공한 건은 항상 `markPublished` 호출 |
+| 1.0.5 | MEDIUM (기능 gap) | 발행이 계속 실패하는 row(예: 잘못된 topic)를 저장소가 스스로 "죽었다"고 표시하고 제외할 방법이 없어서, 위 부분 실패 버그를 고쳐도 독성 row가 매 폴링마다 영원히 재시도됨 | `OutboxStore`에 선택적 `markFailed?(id, error): Promise<void>` 훅 추가. `maxAttempts`/"죽음"의 정의는 kafka-forge가 갖지 않고 구현체(저장소) 책임으로 남김 — `IdempotencyStore.claim`/`release`와 동일한 저장소-정책 분리 원칙 |
 
 live-ranking(2번째 실험)에서 처음 kafka-forge를 실 소비자로 붙이며 발견 → 제안 → 반영까지
-확인. 그 외 producer/consumer/재시도/DLQ/IdempotencyStore 인터페이스는 갭 없이 그대로
-사용 가능했음.
+확인. order-outbox(3번째 실험)에서 `OutboxPublisher`/`OutboxStore`를 실 소비자로 붙이며 위
+1.0.5 이슈 2건을 추가로 발견 → 제안 → 반영까지 확인. 그 외 producer/consumer/재시도/DLQ/
+IdempotencyStore 인터페이스는 갭 없이 그대로 사용 가능했음.
 
 ---
 

@@ -55,6 +55,10 @@
   .log { font-family: ui-monospace, monospace; font-size: 0.78rem; color: #4b5563; max-height: 10rem; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 0.15rem; }
   .log .empty { color: #9ca3af; }
 
+  button.danger { color: #b42318; border-color: #f3a6a0; }
+  button.danger:hover { background: #fef1f0; }
+  .dead-row { font-size: 0.78rem; color: #7c2d12; padding: 0.3rem 0; border-bottom: 1px dashed #f3d9c4; }
+
   .guide ol { padding-left: 1.2rem; margin: 0; }
   .guide li { margin-bottom: 0.5rem; }
   .guide code { background: #eef0f3; border-radius: 4px; padding: 0.05rem 0.35rem; font-size: 0.85em; }
@@ -80,6 +84,16 @@
     </div>
 
     <div class="card full">
+      <h2>죽은 outbox 레코드 (dead-lettered)</h2>
+      <p class="hint" style="margin-top:0">발행이 계속 실패하는 레코드는 5번 재시도 후 격리돼서 더 이상 재시도되지 않습니다(재시도 무한 반복으로 다른 정상 레코드를 막지 않게). "발행 실패 유발"을 누르면 일부러 유효하지 않은 토픽으로 주문 하나를 만들어서 이 흐름을 직접 확인할 수 있습니다 — 몇 초 뒤 이 목록에 나타납니다.</p>
+      <div class="form-row">
+        <button class="danger" id="poison-btn">발행 실패 유발</button>
+        <span class="hint" style="margin:0">누적 <strong id="dead-count">0</strong>건</span>
+      </div>
+      <div id="dead-list"></div>
+    </div>
+
+    <div class="card full">
       <h2>이벤트 로그</h2>
       <div class="log" id="event-log"><div class="empty">아직 이벤트가 없습니다</div></div>
     </div>
@@ -89,6 +103,7 @@
       <ol>
         <li><strong>3단계 지연 확인</strong> — "주문 생성"을 누르면 목록에 <span class="stage created">생성됨</span>으로 바로 나타납니다. 몇 초 뒤 outbox 폴러(기본 5초 주기)가 발행하면 <span class="stage published">발행됨</span>으로 바뀌고, fulfillment 컨슈머가 반영하면 <span class="stage confirmed">확인됨</span>으로 바뀝니다. "발행됨"은 발행-소비가 폴링 주기보다 빠르게 끝나면 목록 배지로는 못 보고 지나칠 수 있는데, 이벤트 로그는 서버가 내려주는 실제 시각으로 재구성해서 두 전이 모두 놓치지 않고 보여줍니다.</li>
         <li><strong>원자성 확인</strong> — 주문 저장과 outbox 기록이 같은 트랜잭션이라, "생성됨" 상태로 목록에 뜬 주문은 반드시 언젠가 발행됩니다(둘 중 하나만 성공하는 경우가 없음).</li>
+        <li><strong>발행 실패 격리 확인</strong> — "발행 실패 유발"을 누르면 일부러 실패하는 주문을 하나 만듭니다. 재시도 5번(약 20~25초) 동안은 계속 시도되다가, 그 이후엔 "죽은 레코드" 목록으로 격리돼서 더 이상 재시도되지 않습니다 — 그 사이에 다른 정상 주문을 생성해보면, 죽은 레코드 하나가 나머지 주문의 발행을 막지 않는다는 것도 확인할 수 있습니다.</li>
         <li><strong>관측 지표</strong> — api의 <a href="/metrics" target="_blank" rel="noopener">/metrics</a>에서 생성 건수(<code>order_outbox_orders_created_total</code>), 발행 지표(<code>kafka_forge_produced_total</code>)를 확인할 수 있습니다. fulfillment의 <code>:3201/metrics</code>에서는 소비 지표(<code>kafka_forge_consumed_total</code>)를 볼 수 있습니다.</li>
       </ol>
     </div>
@@ -163,10 +178,51 @@
         : '<div class="hint">아직 주문이 없습니다</div>';
     }
 
+    // 정상 흐름과 무관한 테스트/데모 전용 트리거 — 서버(shared/constants.ts)의
+    // OUTBOX_POISON_ITEM과 문자열을 맞춰둔다. 이 상품명으로 주문하면 OrdersService가 일부러
+    // 유효하지 않은 토픽으로 outbox row를 만들어서, 재시도 5번 후 dead-lettering되는 걸
+    // raw SQL 없이 눈으로 확인할 수 있다.
+    const OUTBOX_POISON_ITEM = "__outbox-fail__";
+
+    async function triggerPoison() {
+      const res = await fetch("/orders", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ item: OUTBOX_POISON_ITEM, amount: 1 }),
+      });
+      const body = await res.json();
+      logEvent(
+        "발행 실패 유발 — 주문 하나를 일부러 실패하는 토픽으로 생성함 (id " +
+          (body.data ? body.data.id.slice(0, 8) : "?") + "…). 재시도 5번(약 20~25초) 후 죽은 레코드 목록에 나타납니다.",
+      );
+      await refreshOrders();
+    }
+
+    async function refreshDead() {
+      const res = await fetch("/outbox/dead");
+      const body = await res.json();
+      const data = body.data ?? { count: 0, recent: [] };
+      document.getElementById("dead-count").textContent = data.count;
+
+      const list = document.getElementById("dead-list");
+      list.innerHTML = data.recent.length
+        ? data.recent
+            .map(
+              (rec) =>
+                '<div class="dead-row">' + rec.key.slice(0, 8) + "… — " + rec.attempts + "번 실패 — " +
+                rec.lastError + "</div>",
+            )
+            .join("")
+        : '<div class="hint">아직 죽은 레코드가 없습니다</div>';
+    }
+
     document.getElementById("order-btn").addEventListener("click", createOrder);
+    document.getElementById("poison-btn").addEventListener("click", triggerPoison);
 
     refreshOrders();
+    refreshDead();
     setInterval(refreshOrders, 1000);
+    setInterval(refreshDead, 3000);
   </script>
 </body>
 </html>
