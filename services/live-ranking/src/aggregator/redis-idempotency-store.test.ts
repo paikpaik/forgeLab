@@ -47,3 +47,18 @@ describe("RedisIdempotencyStore.claim", () => {
     expect(await store.claim("event-2")).toBe(true);
   });
 });
+
+describe("RedisIdempotencyStore.release", () => {
+  it("release 이후에는 같은 키를 다시 선점할 수 있다 — DLQ 재발행 시 재처리가 막히지 않아야 함", async () => {
+    const { store } = createStore();
+    expect(await store.claim("event-1")).toBe(true);
+    await store.release("event-1");
+    expect(await store.claim("event-1")).toBe(true);
+  });
+
+  it("release 안 하면 계속 선점된 상태로 남는다", async () => {
+    const { store } = createStore();
+    expect(await store.claim("event-1")).toBe(true);
+    expect(await store.claim("event-1")).toBe(false);
+  });
+});

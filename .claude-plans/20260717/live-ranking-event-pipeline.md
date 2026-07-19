@@ -1,5 +1,33 @@
 ## 플랜 실행 이력
 
+### 후속: 2026-07-19 (node-forge/kafka-forge 1.0.4 반영 + 미뤄둔 개선 일괄 진행)
+
+사용자가 "제안서 먼저 다 쓰고, 패널 리팩토링은 수정된 forge 버전으로 같이 진행하자"고
+방향을 정정 — 그래서 delta 검증/idem-test 자체복원/DLQ 컨슈머 dedup을 먼저 구현하려던
+걸 되돌리고, kafka-forge 3건 + node-forge 2건 제안서만 먼저 작성해뒀었다(같은 날짜,
+직전 실행 이력 참고). 사용자가 둘 다 1.0.4로 배포 → 5건 전부 반영 확인 → 이번에 한 번에
+진행.
+
+**실제 변경 파일**: (자세한 목록은 `ARCHITECTURE.md`의 "후속 (2026-07-19)" 참고)
+- `package.json` 버전 업, `redis-idempotency-store.ts`(`release`),
+  `score-event.contract.ts`(`defineDlqEvent`), `dlq-log.service.ts`(`ltrim`+총량 분리),
+  `{ingest,aggregator}/app.module.ts`(`cacheMs`), `submit-score-event.dto.ts`(delta 상하한),
+  `score-event-dlq.consumer.ts`(`InMemoryIdempotencyStore`), `panel.html`(idem-test 자가 복원),
+  `test-utils/fake-redis-client.ts`(`ltrim`/`incr` 추가)
+
+**계획과의 차이**: 없음.
+
+**검증**: `release()`가 실제로 동작하는 걸 가장 확실한 방식(추론이 아니라 재현)으로
+확인 — `__dlq-test__`로 이벤트를 DLQ까지 보낸 뒤, **같은 eventId**로 이번엔 정상 처리되는
+payload(다른 userId)를 재발행해서 실제로 반영되는 것 확인(release 없었으면 조용히
+스킵됐을 케이스). 기존 성공 이벤트의 중복 차단은 회귀 없이 그대로 동작. delta 상한 초과
+시 400, `DELETE /dlq` 후 목록은 비지만 누적 총량은 유지되는 것도 확인. vitest 27개 전부 통과.
+
+**잔존 작업**: 냉정한 분석에서 나온 항목(A/B/C 카테고리) 전부 처리 완료. 추가로 발견되는
+게 없으면 이 실험은 이 상태로 안정 단계로 본다.
+
+---
+
 ### 후속: 2026-07-19 (DLQ 관측성 확보)
 
 냉정한 분석에서 발견한 MEDIUM 이슈 중 마지막으로 남아있던 걸 처리 — "재시도 소진된 이벤트를

@@ -64,6 +64,20 @@ export class FakeRedisClient {
     return (this.lists.get(key) ?? []).length;
   }
 
+  async ltrim(key: string, start: number, stop: number): Promise<void> {
+    const list = this.lists.get(key);
+    if (!list) return;
+    const end = stop === -1 ? list.length : stop + 1;
+    this.lists.set(key, list.slice(start, end));
+  }
+
+  async incr(key: string): Promise<number> {
+    const current = Number((await this.get(key)) ?? "0");
+    const next = current + 1;
+    await this.set(key, String(next));
+    return next;
+  }
+
   async get(key: string): Promise<string | null> {
     const entry = this.strings.get(key);
     if (!entry) return null;

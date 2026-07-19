@@ -217,6 +217,11 @@
           " (" + first.score + " → " + second.score + ")",
       );
 
+      // 검증이 끝나면 이번에 올린 delta만큼 되돌려서 idem-test가 실제 랭킹에 계속 쌓여
+      // 남지 않게 한다 — 반복 테스트해도 순위표가 테스트 흔적으로 지저분해지지 않는다.
+      await submitEvent(userId, -delta);
+      await delay(1200);
+
       btn.disabled = false;
       await refreshBoard();
     }

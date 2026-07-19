@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import type { Kafka } from "kafkajs";
-import { StandardConsumer } from "@paikpaik/kafka-forge";
+import { InMemoryIdempotencyStore, StandardConsumer } from "@paikpaik/kafka-forge";
 import { DLQ_CONSUMER_GROUP_ID, KAFKA_INSTANCE } from "../shared/constants";
 import { ScoreEventDlq } from "../shared/score-event.contract";
 import { DlqLogService } from "./dlq-log.service";
@@ -9,6 +9,11 @@ import { DlqLogService } from "./dlq-log.service";
 export class ScoreEventDlqConsumer implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ScoreEventDlqConsumer.name);
   private readonly consumer: StandardConsumer;
+  // 이 컨슈머는 "확인용 로그에 같은 실패를 두 번 안 남기기"만 하면 되는 수준이라, Redis처럼
+  // 재시작을 넘어 살아남는 멱등성까지는 필요 없다 — kafka-forge 기본 제공 구현으로 충분하다
+  // (RedisIdempotencyStore가 왜 필요했는지와 대비되는 지점). 1.0.4의 claim/release도 이미
+  // 구현돼 있어서 그대로 이득을 본다.
+  private readonly dedupStore = new InMemoryIdempotencyStore({ ttlMs: 60_000 });
 
   constructor(
     @Inject(KAFKA_INSTANCE) kafka: Kafka,
@@ -39,7 +44,7 @@ export class ScoreEventDlqConsumer implements OnModuleInit, OnModuleDestroy {
           this.logger.error(`DLQ 기록 실패: ${(err as Error).message}`);
         }
       },
-      { retry: false },
+      { retry: false, idempotencyStore: this.dedupStore },
     );
 
     await this.consumer.run();
@@ -47,6 +52,7 @@ export class ScoreEventDlqConsumer implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
+    this.dedupStore.stop();
     await this.consumer.disconnect();
   }
 }

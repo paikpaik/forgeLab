@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { InjectRedis } from "@paikpaik/node-forge/redis/nestjs";
 import type { ForgeRedisClient } from "@paikpaik/node-forge/redis";
-import { DLQ_LOG_KEY, DLQ_LOG_LIMIT } from "../shared/constants";
+import { DLQ_LOG_KEY, DLQ_LOG_LIMIT, DLQ_TOTAL_KEY } from "../shared/constants";
 
 export interface DlqLogEntry {
   userId: string;
@@ -25,17 +25,24 @@ export class DlqLogService {
   constructor(@InjectRedis() private readonly redis: ForgeRedisClient) {}
 
   async record(entry: DlqLogEntry): Promise<void> {
+    // 누적 총량은 별도 카운터로 잰다 — 아래 ltrim으로 리스트 자체는 최근 N건만 남기기
+    // 때문에 llen으로는 "총 몇 건 실패했는지"를 알 수 없다(node-forge 1.0.4의 ltrim으로
+    // 무한 growth 문제를 해결하면서 생긴 트레이드오프).
+    await this.redis.incr(DLQ_TOTAL_KEY);
     await this.redis.lpush(DLQ_LOG_KEY, entry);
+    await this.redis.ltrim(DLQ_LOG_KEY, 0, DLQ_LOG_LIMIT - 1);
   }
 
   async getOverview(): Promise<DlqOverview> {
-    const [count, recent] = await Promise.all([
-      this.redis.llen(DLQ_LOG_KEY),
+    const [totalRaw, recent] = await Promise.all([
+      this.redis.get(DLQ_TOTAL_KEY),
       this.redis.lrange<DlqLogEntry>(DLQ_LOG_KEY, 0, DLQ_LOG_LIMIT - 1),
     ]);
-    return { count, recent };
+    return { count: totalRaw ? Number(totalRaw) : 0, recent };
   }
 
+  // "지우기"는 확인용 목록만 비운다 — 총 실패 건수(DLQ_TOTAL_KEY)는 실제로 있었던 일이니
+  // 지우지 않는다(kafka-forge의 kafka_forge_consume_errors_total과 의미를 맞춤).
   async clear(): Promise<void> {
     await this.redis.del(DLQ_LOG_KEY);
   }

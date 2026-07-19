@@ -129,8 +129,9 @@ flowchart TB
 | 키 | 타입 | 용도 |
 |---|---|---|
 | `ranking:{leaderboardId}` | ZSET | member=`userId`, score=누적 점수(`zincrby`) |
-| `idempotency:score-event:{eventId}` | STRING (TTL 1시간) | consumer가 이 이벤트를 이미 처리했는지 기록(현재는 `claim`이 대신 씀) |
-| `dlq:score-event:log` | LIST | DLQ로 이동한 이벤트를 사람이 볼 수 있게 옮겨 담은 확인용 사본(최근 `DLQ_LOG_LIMIT`건만 조회) |
+| `idempotency:score-event:{eventId}` | STRING (TTL 1시간) | `claim`/`release`가 선점 상태를 기록(성공하면 유지, 재시도 소진되면 `release`로 삭제) |
+| `dlq:score-event:log` | LIST (최근 `DLQ_LOG_LIMIT`건만, `ltrim`으로 물리적으로 유지) | DLQ로 이동한 이벤트를 사람이 볼 수 있게 옮겨 담은 확인용 사본 |
+| `dlq:score-event:total` | STRING(정수), `incr` | DLQ로 이동한 이벤트의 실제 누적 총량(리스트는 `ltrim`으로 잘려서 이 값이 진짜 총량) |
 
 ## Kafka 토픽
 
@@ -155,10 +156,15 @@ flowchart TB
 | vitest로 핵심 로직(랭킹 반영/조회/리셋, 멱등성 저장소, 이벤트 스키마)에 유닛테스트 | 실제 Redis/Kafka 없이 `ForgeRedisClient`의 필요한 메서드만 인메모리로 구현한 fake로 검증 (waiting-room과 동일 패턴) |
 | 패널에 "같은 이벤트 두 번 보내기" 버튼 추가 | 냉정한 분석 중 발견 — 봇 시뮬레이션/+10점 버튼은 매번 새 `eventId`를 써서 멱등성 검증 경로를 전혀 안 지나갔다. 이 실험의 핵심(재배달돼도 중복 안 됨)을 UI만으로는 아무도 확인할 수 없었던 문제를 해결 |
 | 멱등성 선점은 `claim`으로, `wasProcessed`/`markProcessed`는 인터페이스 호환용으로만 유지 (kafka-forge 1.0.3) | 처음엔 "체크 → 이펙트 적용 → 마킹(사후)" 순서라, 이펙트 적용 후 마킹 전에 크래시/리밸런스가 나면 재배달 시 중복 반영되는 크래시 윈도우가 있었다. 이펙트 실행 "전" 원자적 선점을 제안(`proposals/kafka-forge/20260717-idempotency-claim-before-effect.md`) → 1.0.3에 `IdempotencyStore.claim`으로 반영, `StandardConsumer`가 있으면 핸들러 실행 *전*에 이걸로 선점하고 사후 마킹은 스킵한다. `RedisIdempotencyStore.claim()`은 node-forge의 기존 분산 락(`lock()`, SET NX PX)을 그대로 재사용해서 구현 — node-forge 쪽 변경은 불필요했음. 트레이드오프: 크래시가 선점 이후 이펙트 완료 전에 나면 그 메시지는 유실(과소 반영)될 수 있음 — 리더보드 점수가 부풀려지는 것보다 낫다고 판단해 받아들임 |
-| DLQ 전용 컨슈머를 `defineEvent()` 없이 `EventContract` 리터럴로 직접 구성 | `toDlqTopicName()`이 만드는 `<topic>.dlq` 형태는 kafka-forge 자신의 토픽 네이밍 컨벤션(`<domain>.<event>.v<N>`)을 안 지켜서, `defineEvent()`로 만들면 내부 `assertValidTopicName`이 던진다. `EventContract`는 순수 인터페이스라 `defineEvent()`를 안 거치고 리터럴로 만들면 이 검증을 우회할 수 있다 — 이 토픽은 우리가 만드는 게 아니라 `StandardConsumer`가 파생시키는 토픽이라 애초에 우리 네이밍 컨벤션의 대상이 아니라고 판단 |
+| DLQ 전용 컨슈머는 `defineDlqEvent(ScoreEvent)`로 구성 (kafka-forge 1.0.4) | 처음엔 `toDlqTopicName()`이 만드는 `<topic>.dlq`가 kafka-forge 자신의 토픽 네이밍 컨벤션을 안 지켜서 `defineEvent()`가 던지는 걸 `EventContract` 리터럴로 직접 우회했다. envelope 스키마(`{payload, error, failedAt}`)를 매번 손으로 정의해야 하는 보일러플레이트를 없애자고 제안(`proposals/kafka-forge/20260719-dlq-topic-naming-helper.md`) → 1.0.4에 `defineDlqEvent()`로 반영, 우리 쪽 `DlqEnvelopeSchema` 수동 정의를 제거하고 `defineDlqEvent(ScoreEvent)` 한 줄로 교체 |
 | DLQ 전용 컨슈머는 `retry: false` + 핸들러 내부에서 모든 예외를 삼킴 | 여기서 예외가 새 나가면 kafka-forge가 "이 DLQ의 DLQ"(`...v1.dlq.dlq`)로 보내려 하는데, 그 이름도 네이밍 컨벤션을 어겨서 `assertValidTopicName`이 또 던진다 — 무한히 재귀하는 실패를 막기 위해 이 컨슈머의 핸들러는 절대 예외를 밖으로 던지지 않고 로그만 남긴다 |
-| DLQ 목록은 "확인용 사본"일 뿐 재처리 대상이 아님 (Redis LIST, `ltrim` 없이 조회 시에만 최근 N건만 봄) | 이 실험의 목적은 "실패가 조용히 사라지지 않고 보이게" 하는 관측성 확보이지, 실패한 이벤트를 자동으로 재처리하는 신뢰성 메커니즘을 만드는 게 아니다. node-forge에 `ltrim`이 없어 리스트 자체를 물리적으로 자르진 않지만, 랩 환경에서 무한히 쌓일 걱정은 크지 않다고 판단해 최소 구현으로 남김 |
+| DLQ 로그는 `ltrim`으로 최근 N건만 물리적으로 유지, 누적 총량은 별도 `incr` 카운터로 분리 (node-forge 1.0.4) | 리스트를 무한히 자라게 두던 걸 `ltrim` 추가로 제안(`proposals/node-forge/20260719-list-ltrim.md`) → 1.0.4에 반영. 다만 리스트를 자르면 `llen`으로는 더 이상 "총 몇 건 실패했는지"를 알 수 없어서, `dlq:score-event:total`(incr)로 누적 총량을 따로 센다 — "지우기"는 이 총량은 안 지우고 목록만 비운다(실제로 있었던 일은 지우지 않는다는 의미) |
+| DLQ 전용 컨슈머에 `InMemoryIdempotencyStore` 사용 (Redis 아님) | 이 컨슈머는 "확인용 로그에 같은 실패를 두 번 안 남기기"만 하면 되고, 재시작을 넘어 살아남는 멱등성까지는 필요 없다 — `RedisIdempotencyStore`가 왜 필요했는지(재시작 후 재배달 시나리오)와 대비되는, kafka-forge 기본 제공 구현으로 충분한 경우 |
 | DLQ를 실제로 채워보는 "실패 이벤트 발생시키기" 버튼 (poison-pill userId) | 실제로 재현 가능하게 실패시킬 방법이 없으면 DLQ 카드가 항상 비어 보여서 "이게 진짜 동작하는지" 확인할 수 없다. 특정 `userId`(`__dlq-test__`)로 오면 aggregator 핸들러가 항상 예외를 던지게 만들어, 버튼 하나로 재시도 소진 → DLQ 이동 → 목록 표시까지 전체 흐름을 눈으로 확인할 수 있게 함 |
+| 멱등성 선점 실패 시 `release()`로 되돌림 (kafka-forge 1.0.4) | `claim`은 성공/실패와 무관하게 영구 선점이라, DLQ로 간(한 번도 성공 못 한) 메시지를 버그 고치고 재발행해도 "이미 처리됨"으로 스킵되는 문제를 발견 → `IdempotencyStore.release` 추가를 제안(`proposals/kafka-forge/20260719-idempotency-release-on-dlq.md`) → 1.0.4에 반영, `StandardConsumer`가 재시도 소진 시 자동으로 `release`를 호출해준다. `RedisIdempotencyStore.release()`는 `claim`에 쓴 락 키를 지우기만 하면 됨 |
+| ingest DTO에 `delta` 상/하한(`±1,000,000`) 검증 추가 | 정확한 비즈니스 한도는 아니고, 실수/악의적으로 거대한 값이 들어와 랭킹을 왜곡하는 걸 막는 안전판 |
+| "멱등성 확인" 테스트는 검증 후 자기 delta를 되돌림 | `idem-test` 유저가 반복 테스트 때마다 점수가 계속 쌓여서 실제 랭킹(상위 10)에 테스트 흔적이 계속 남는 문제 발견 — 검증이 끝나면 같은 크기의 음수 delta를 한 번 더 보내 원상복구 |
+| `/health`에 `cacheMs`(5초) 적용 (node-forge 1.0.4) | `createKafkaHealthChecker`가 호출마다 새 Kafka Admin 연결을 열고 닫는 비효율을 제안(`proposals/node-forge/20260719-health-checker-caching.md`) → 1.0.4에 `checkHealth`/`HealthModule.forRootAsync({cacheMs})`로 반영 |
 
 ## 검증 이력 (2026-07-17)
 
@@ -225,5 +231,36 @@ flowchart TB
 `GET /dlq`에 `{userId, leaderboardId, delta, error, failedAt}`이 정확히 기록되는 것 실제로
 재현 확인(가장 확실한 방식 — 코드 경로 추론이 아니라 진짜로 DLQ까지 도달시켜봄). vitest 24개
 전부 통과.
+
+### 후속 (2026-07-19) — node-forge/kafka-forge 1.0.4 반영 + 나머지 개선 일괄 진행
+
+`proposals/{kafka-forge,node-forge}/20260719/` 5건 전부 1.0.4로 반영되어(4건 kafka-forge:
+release, defineDlqEvent, handledTotal / consumedTotal 문구 정리 — 1건 node-forge: ltrim,
++ node-forge health cacheMs), 로컬 우회를 걷어내고 공식 API로 되돌리면서, 이전에 "패널
+리팩토링은 forge 반영 후 한 번에" 미뤄뒀던 개선(delta 검증, idem-test 자체 복원, DLQ 컨슈머
+dedup)도 같이 진행했다.
+
+**실제 변경 파일**:
+- `package.json` — `@paikpaik/kafka-forge`/`@paikpaik/node-forge` `^1.0.3` → `^1.0.4`
+- `src/aggregator/redis-idempotency-store.ts` — `release(key)` 추가(claim 락 키 삭제).
+  `redis-idempotency-store.test.ts`에 release 검증 2건 추가
+- `src/shared/score-event.contract.ts` — `ScoreEventDlq`를 `defineDlqEvent(ScoreEvent)`로
+  교체, 수동 `DlqEnvelopeSchema` 제거
+- `src/aggregator/dlq-log.service.ts` — `record()`에 `ltrim` 추가, 누적 총량은
+  `DLQ_TOTAL_KEY`(`incr`)로 분리. `dlq-log.service.test.ts`에 ltrim 캡핑/총량 유지 테스트 추가
+- `src/{ingest,aggregator}/app.module.ts` — `HealthModule.forRootAsync({ cacheMs: 5000 })`
+- `src/ingest/dto/submit-score-event.dto.ts` — `delta` `@Min(-1_000_000)`/`@Max(1_000_000)`
+- `src/aggregator/score-event-dlq.consumer.ts` — `InMemoryIdempotencyStore({ttlMs: 60000})`로
+  같은 실패의 중복 기록 방지
+- `public/panel.html` — 멱등성 테스트가 검증 후 자기 delta를 되돌려서 랭킹에 흔적을 안 남김
+- `src/test-utils/fake-redis-client.ts` — `ltrim`, `incr` 흉내 추가
+
+**계획과의 차이**: 없음 — 제안서에 적어둔 API 그대로 반영됨.
+
+**검증**: 핵심 시나리오를 처음부터 끝까지 재현 — ①`__dlq-test__`로 이벤트 발행 → 재시도
+소진 → DLQ 도달 확인 ②**같은 eventId**로 이번엔 성공하는 payload(다른 userId)를 재발행 →
+정상적으로 반영됨(`release()`가 없었다면 조용히 스킵됐을 케이스) ③기존처럼 성공한
+이벤트의 중복 발행은 여전히 차단됨(회귀 없음) ④delta 상한 초과 시 400 ⑤`DELETE /dlq` 후
+목록은 비지만 누적 총량은 유지. vitest 27개 전부 통과.
 
 관련 플랜: `.claude-plans/20260717/live-ranking-event-pipeline.md` (실행 이력 포함).

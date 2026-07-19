@@ -1,4 +1,8 @@
-import { IsInt, IsOptional, IsString, IsUUID, MinLength } from "class-validator";
+import { IsInt, IsOptional, IsString, IsUUID, Max, Min, MinLength } from "class-validator";
+
+// 상/하한은 정확한 비즈니스 한도가 아니라, 임의로 거대한 값이 실수로(혹은 악의적으로) 들어와
+// 랭킹을 왜곡하는 걸 막는 안전판이다. 패널의 버스트 시뮬레이션(최대 델타 1000)보다는 넉넉하게 잡음.
+const MAX_DELTA = 1_000_000;
 
 export class SubmitScoreEventDto {
   @IsString()
@@ -6,6 +10,8 @@ export class SubmitScoreEventDto {
   userId!: string;
 
   @IsInt()
+  @Min(-MAX_DELTA)
+  @Max(MAX_DELTA)
   delta!: number;
 
   // 클라이언트가 재시도 시 같은 이벤트로 취급되길 원하면 직접 지정한다. 생략하면 서버가 매번

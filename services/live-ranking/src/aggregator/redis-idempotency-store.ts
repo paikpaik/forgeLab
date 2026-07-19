@@ -27,6 +27,15 @@ export class RedisIdempotencyStore implements IdempotencyStore {
     return token !== null;
   }
 
+  // kafka-forge 1.0.4부터, claim으로 선점했지만 재시도까지 다 실패해서 DLQ로 이동하면
+  // StandardConsumer가 release를 호출해준다 — 그래야 나중에 버그를 고치고 같은 메시지를
+  // 재발행했을 때 "이미 처리됨"으로 영구히 스킵되지 않고 다시 시도할 수 있다
+  // (proposals/kafka-forge/20260719-idempotency-release-on-dlq.md 반영). claim에 쓴 락 키를
+  // 그냥 지우면 된다 — 성공한 메시지는 release가 호출되지 않으므로 그 선점은 그대로 유지된다.
+  async release(key: string): Promise<void> {
+    await this.redis.del(idempotencyKey("score-event", key));
+  }
+
   // claim이 있는 한 StandardConsumer는 이제 이 둘을 호출하지 않는다 — 인터페이스가 필수로
   // 요구해서 남겨두지만, 실질적으로는 죽은 코드다. 직접 저장소 상태를 확인하는 테스트/디버깅
   // 용도로는 여전히 쓸 수 있다.
