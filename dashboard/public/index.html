@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>forge-lab dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: #ffffff; color: #1f2430; height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 1rem 1.5rem 0; }
+  h1 { font-size: 1.1rem; margin: 0 0 0.75rem; }
+
+  .tabs { display: flex; align-items: center; gap: 0.75rem; border-bottom: 1px solid #e2e5ea; padding: 0.6rem 1.5rem 0; }
+
+  /* 메타 탭(Architecture/Issue) — 세그먼트 컨트롤처럼 배경 있는 그룹으로 묶어서
+     "화면 전환" 탭이라는 걸 서비스 탭과 확실히 구분한다. */
+  .tab-group.meta { display: flex; gap: 0.15rem; background: #f5f4fa; border: 1px solid #ece9f5; border-radius: 8px; padding: 0.2rem; margin-bottom: 0.6rem; }
+  .tab-group.meta .tab { padding: 0.35rem 0.8rem; border-radius: 6px; border-bottom: none; color: #6b6478; }
+  .tab-group.meta .tab:hover { background: #ece9f5; }
+  .tab-group.meta .tab.active { background: #ffffff; color: #7c3aed; font-weight: 600; box-shadow: 0 1px 2px rgba(124, 58, 237, 0.15); }
+
+  .tab-divider { align-self: stretch; width: 1px; background: #e2e5ea; margin-bottom: 0.6rem; }
+
+  /* 서비스 탭 — 브라우저 탭처럼 밑줄로 활성 상태를 표시하는 기존 스타일 유지. */
+  .tab-group.services { display: flex; gap: 0.25rem; }
+  .tab-group.services .tab { padding: 0.55rem 1rem; border: none; background: none; color: #6b7280; cursor: pointer; border-bottom: 2px solid transparent; font-size: 0.9rem; }
+  .tab-group.services .tab:hover { color: #1f2430; }
+  .tab-group.services .tab.active { color: #1f2430; border-bottom-color: #2f6feb; font-weight: 600; }
+
+  .tab { cursor: pointer; font-size: 0.85rem; }
+
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 1rem 1.5rem 1.5rem; gap: 0.75rem; }
+  .empty { color: #9ca3af; padding: 2rem; }
+
+  .common-bar { display: flex; align-items: center; gap: 0.5rem; }
+  button { padding: 0.4rem 0.8rem; border-radius: 6px; border: 1px solid #d1d5db; background: #ffffff; color: #1f2430; cursor: pointer; font-size: 0.85rem; }
+  button:hover { background: #f3f4f6; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .status-banner.busy { display: flex; background: #eef2ff; border: 1px solid #c7d2fe; color: #3730a3; }
+
+  .common-output { white-space: pre-wrap; background: #fafbfc; border: 1px solid #e2e5ea; padding: 0.5rem 0.75rem; border-radius: 6px; max-height: 8rem; overflow: auto; font-size: 0.75rem; color: #6b7280; }
+
+  .panel-frame { flex: 1; min-height: 0; border: 1px solid #e2e5ea; border-radius: 8px; overflow: hidden; background: #fafbfc; }
+  .panel-frame iframe { width: 100%; height: 100%; border: none; }
+  .no-panel { flex: 1; display: flex; align-items: center; justify-content: center; color: #9ca3af; border: 1px dashed #e2e5ea; border-radius: 8px; }
+
+  .status-banner { display: none; align-items: center; gap: 0.5rem; padding: 0.6rem 0.9rem; border-radius: 6px; font-size: 0.85rem; }
+  .status-banner.down { display: flex; background: #fff8e1; border: 1px solid #f0d060; color: #7a5b00; }
+
+  .sub-tabs { display: flex; gap: 0.4rem; }
+  .sub-tab { padding: 0.3rem 0.7rem; border-radius: 999px; border: 1px solid #d1d5db; background: #ffffff; color: #6b7280; cursor: pointer; font-size: 0.78rem; }
+  .sub-tab:hover { background: #f3f4f6; }
+  .sub-tab.active { background: #f3ecff; border-color: #7c3aed; color: #7c3aed; font-weight: 600; }
+
+  .doc-view { flex: 1; min-height: 0; overflow: auto; border: 1px solid #e2e5ea; border-radius: 8px; padding: 1.25rem 1.5rem; background: #fafbfc; line-height: 1.6; }
+  .doc-view h1 { font-size: 1.3rem; }
+  .doc-view h2 { font-size: 1.05rem; margin-top: 1.5rem; border-bottom: 1px solid #e2e5ea; padding-bottom: 0.3rem; }
+  .doc-view pre { background: #f3f4f6; padding: 0.75rem; border-radius: 6px; overflow-x: auto; }
+  .doc-view code { font-family: ui-monospace, monospace; font-size: 0.85em; }
+  .doc-view table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; }
+  .doc-view th, .doc-view td { border: 1px solid #e2e5ea; padding: 0.4rem 0.6rem; text-align: left; font-size: 0.85rem; }
+  .doc-view th { background: #f3f4f6; }
+  .doc-view .mermaid { display: flex; justify-content: center; overflow-x: auto; background: #ffffff; border: 1px solid #e2e5ea; border-radius: 8px; padding: 1.25rem; margin: 1rem 0; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>forge-lab dashboard</h1>
+  </header>
+  <div class="tabs" id="tabs"></div>
+  <main id="main"><div class="empty">불러오는 중…</div></main>
+
+  <script>
+    // Architecture/Issue는 서비스가 아니라 docs/*.md를 렌더링하는 고정 탭이다 — 서비스
+    // 패널 탭과 섞이지 않게 별도 그룹으로 관리하고 화면에서도 구분선으로 나눈다.
+    // Architecture는 서비스가 늘어나도 이 문서가 안 부풀도록 "전체" + 서비스별 서브탭
+    // 구조를 가진다 (subNav: true).
+    const GLOBAL_ARCH_SCOPE = "__global__";
+    const META_TABS = [
+      { id: "__architecture__", label: "Architecture", subNav: true },
+      { id: "__issues__", label: "Issue", doc: "issues" },
+    ];
+    let services = [];
+    let activeName = null;
+    let archScope = GLOBAL_ARCH_SCOPE;
+
+    if (window.mermaid) {
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "base",
+        // 라벨을 백틱(마크다운 문자열) 문법으로 쓰므로 htmlLabels 없이도 줄바꿈/자동
+        // 줄바꿈이 되지만, useMaxWidth: false로 컨테이너 폭에 맞춰 억지로 축소되면서
+        // 글자가 뭉개지는 것도 같이 막는다 — 넘치면 컨테이너가 가로 스크롤을 담당한다.
+        flowchart: { useMaxWidth: false, nodeSpacing: 45, rankSpacing: 60, curve: "basis" },
+        themeVariables: {
+          fontFamily: "system-ui, sans-serif",
+          fontSize: "14px",
+          primaryColor: "#eef2ff",
+          primaryBorderColor: "#94a3b8",
+          primaryTextColor: "#1f2430",
+          lineColor: "#9ca3af",
+          clusterBkg: "#fafbfc",
+          clusterBorder: "#e2e5ea",
+        },
+      });
+    }
+
+    async function fetchJson(url, options) {
+      const res = await fetch(url, options);
+      return res.json();
+    }
+
+    // iframe.src에 같은 값을 다시 대입하면 브라우저가 "안 바뀌었네" 하고 무시한다 —
+    // 매번 다른 쿼리스트링을 붙여서 실제로 새로 로드되게 만든다.
+    function reloadPanelIframe(panelUrl) {
+      const iframe = document.querySelector(".panel-frame iframe");
+      if (!iframe || !panelUrl) return;
+      const separator = panelUrl.includes("?") ? "&" : "?";
+      iframe.src = panelUrl + separator + "_t=" + Date.now();
+    }
+
+    function delay(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    // "compose ps --format json"은 개행으로 구분된 JSON 라인들이다. 서비스 이름을 특정
+    // 컨테이너 이름("app" 등)으로 가정하지 않고 — compose 파일에 정의된 컨테이너 수가
+    // 서비스마다 다를 수 있으므로(waiting-room=2개, live-ranking=4개 등) — 정의된 컨테이너가
+    // 하나라도 있고 전부 running일 때만 "실행 중"으로 판정한다. 하나라도 안 떠 있으면(빌드
+    // 실패, 크래시 등) 꺼져있음으로 취급해 사용자가 문제를 알아챌 수 있게 한다.
+    async function isServiceRunning(name) {
+      try {
+        const data = await fetchJson("/api/services/" + name + "/status");
+        if (!data.output) return false;
+        const entries = data.output
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            try {
+              return JSON.parse(line);
+            } catch {
+              return null;
+            }
+          })
+          .filter(Boolean);
+        return entries.length > 0 && entries.every((entry) => entry.State === "running");
+      } catch {
+        return false;
+      }
+    }
+
+    // 배너만 갱신한다 (폴링 없음 — 탭을 열 때, Up/Down 직후에만 호출된다).
+    async function refreshStatusBanner(name) {
+      const banner = document.getElementById("status-banner");
+      if (!banner) return false;
+      const running = await isServiceRunning(name);
+      banner.className = "status-banner" + (running ? "" : " down");
+      banner.textContent = running ? "" : "이 서비스가 꺼져있습니다 — 위 Up 버튼을 눌러 실행해주세요.";
+      return running;
+    }
+
+    // Up/Down/Status는 모든 서비스에 공통이다 (docker compose 라이프사이클) — dashboard가
+    // 직접 소유하는 유일한 기능이고, 그 외 서비스별 기능/화면은 각 서비스의 panelUrl(iframe)에
+    // 전적으로 맡긴다. Up/Down은 이미지 빌드 때문에 오래 걸릴 수 있어서 버튼을 잠그고
+    // "진행 중" 배너를 띄운다 — 그동안 사용자가 아무 반응이 없다고 느끼지 않도록.
+    async function runCommon(service, action) {
+      const buttons = document.querySelectorAll(".common-bar button");
+      buttons.forEach((btn) => (btn.disabled = true));
+
+      const banner = document.getElementById("status-banner");
+      if (banner && action !== "status") {
+        banner.className = "status-banner busy";
+        banner.textContent = (action === "up" ? "실행" : "중지") + " 중… (이미지 빌드 시 시간이 걸릴 수 있습니다)";
+      }
+
+      const method = action === "status" ? "GET" : "POST";
+      const data = await fetchJson("/api/services/" + service.name + "/" + action, { method });
+      const output = document.getElementById("common-output");
+      if (output) output.textContent = JSON.stringify(data, null, 2);
+
+      buttons.forEach((btn) => (btn.disabled = false));
+      const running = await refreshStatusBanner(service.name);
+
+      if (action === "down") {
+        // 내려간 걸 눈으로 바로 확인할 수 있게 이전 화면을 지운다 (그대로 두면 마치
+        // 아무 일도 안 일어난 것처럼 보인다).
+        const iframe = document.querySelector(".panel-frame iframe");
+        if (iframe) iframe.src = "about:blank";
+      } else if (action === "up" && running) {
+        // 컨테이너 State가 running이어도 그 안의 서버가 포트를 열기까진 약간 더 걸린다 —
+        // 너무 일찍 새로고침하면 또 연결 실패로 보일 수 있어 잠깐 기다렸다가 로드한다.
+        await delay(2000);
+        reloadPanelIframe(service.panelUrl);
+      }
+    }
+
+    function renderTabs() {
+      const tabs = document.getElementById("tabs");
+      const metaTabs = META_TABS.map(
+        (t) =>
+          '<button class="tab' + (t.id === activeName ? " active" : "") + '" data-name="' + t.id + '">' +
+          t.label +
+          "</button>",
+      ).join("");
+      const serviceTabs = services
+        .map(
+          (s) =>
+            '<button class="tab' + (s.name === activeName ? " active" : "") + '" data-name="' + s.name + '">' +
+            s.name +
+            "</button>",
+        )
+        .join("");
+
+      tabs.innerHTML =
+        '<div class="tab-group meta">' + metaTabs + "</div>" +
+        '<div class="tab-divider"></div>' +
+        '<div class="tab-group services">' + serviceTabs + "</div>";
+
+      tabs.querySelectorAll(".tab").forEach((btn) => {
+        btn.addEventListener("click", () => selectTab(btn.dataset.name));
+      });
+    }
+
+    // dashboard는 docs/*.md의 내용을 해석하지 않는다 — 그냥 마크다운 + mermaid를 렌더링해서
+    // 보여줄 뿐이다. 서비스별 panelUrl과 같은 원칙("내용은 모르고 전달만 한다").
+    function renderMarkdownInto(view, content) {
+      view.innerHTML = marked.parse(content);
+
+      view.querySelectorAll("pre > code.language-mermaid").forEach((codeEl) => {
+        const div = document.createElement("div");
+        div.className = "mermaid";
+        div.textContent = codeEl.textContent;
+        codeEl.parentElement.replaceWith(div);
+      });
+
+      if (window.mermaid) mermaid.run({ nodes: view.querySelectorAll(".mermaid") });
+    }
+
+    async function renderDoc(docName) {
+      const main = document.getElementById("main");
+      main.innerHTML = '<div class="empty">불러오는 중…</div>';
+
+      const data = await fetchJson("/api/docs/" + docName);
+      if (data.error) {
+        main.innerHTML = '<div class="empty">' + data.error + "</div>";
+        return;
+      }
+
+      main.innerHTML = '<div class="doc-view" id="doc-view"></div>';
+      renderMarkdownInto(document.getElementById("doc-view"), data.content);
+    }
+
+    // Architecture 탭 전용: "전체"(레포 전역) + architectureDoc을 선언한 서비스별 서브탭.
+    // 서비스가 늘어날수록 서브탭만 늘어나고, 각 문서 자체는 서비스가 직접 관리한다.
+    async function renderArchitectureTab() {
+      archScope = GLOBAL_ARCH_SCOPE;
+      const main = document.getElementById("main");
+      const subjects = [
+        { scope: GLOBAL_ARCH_SCOPE, label: "전체" },
+        ...services.filter((s) => s.hasArchitectureDoc).map((s) => ({ scope: s.name, label: s.name })),
+      ];
+
+      main.innerHTML = '<div class="sub-tabs" id="arch-sub-tabs"></div><div class="doc-view" id="doc-view"></div>';
+
+      function renderSubTabs() {
+        const bar = document.getElementById("arch-sub-tabs");
+        bar.innerHTML = subjects
+          .map(
+            (s) =>
+              '<button class="sub-tab' + (s.scope === archScope ? " active" : "") + '" data-scope="' + s.scope + '">' +
+              s.label +
+              "</button>",
+          )
+          .join("");
+        bar.querySelectorAll(".sub-tab").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            archScope = btn.dataset.scope;
+            renderSubTabs();
+            await loadArchDoc();
+          });
+        });
+      }
+
+      async function loadArchDoc() {
+        const view = document.getElementById("doc-view");
+        view.innerHTML = '<div class="empty">불러오는 중…</div>';
+        const url = archScope === GLOBAL_ARCH_SCOPE ? "/api/docs/architecture" : "/api/services/" + archScope + "/architecture";
+        const data = await fetchJson(url);
+        if (data.error) {
+          view.innerHTML = '<div class="empty">' + data.error + "</div>";
+          return;
+        }
+        renderMarkdownInto(view, data.content);
+      }
+
+      renderSubTabs();
+      await loadArchDoc();
+    }
+
+    function renderMain() {
+      const metaTab = META_TABS.find((t) => t.id === activeName);
+      if (metaTab) {
+        if (metaTab.subNav) {
+          renderArchitectureTab();
+        } else {
+          renderDoc(metaTab.doc);
+        }
+        return;
+      }
+
+      const main = document.getElementById("main");
+      const service = services.find((s) => s.name === activeName);
+      if (!service) {
+        main.innerHTML = '<div class="empty">서비스를 선택하세요</div>';
+        return;
+      }
+
+      const panel = service.panelUrl
+        ? '<div class="panel-frame"><iframe src="' + service.panelUrl + '"></iframe></div>'
+        : '<div class="no-panel">이 서비스는 전용 패널(panelUrl)이 없습니다 — forge-lab.json에 panelUrl을 선언하면 여기 표시됩니다.</div>';
+      const refreshBtn = service.panelUrl ? '<button data-action="refresh-panel">패널 새로고침</button>' : "";
+
+      main.innerHTML =
+        '<div class="common-bar">' +
+        '<button data-action="up">Up</button>' +
+        '<button data-action="down">Down</button>' +
+        '<button data-action="status">Status</button>' +
+        refreshBtn +
+        "</div>" +
+        '<div class="status-banner" id="status-banner"></div>' +
+        '<pre class="common-output" id="common-output"></pre>' +
+        panel;
+
+      main.querySelectorAll(".common-bar button").forEach((btn) => {
+        if (btn.dataset.action === "refresh-panel") {
+          btn.addEventListener("click", () => reloadPanelIframe(service.panelUrl));
+        } else {
+          btn.addEventListener("click", () => runCommon(service, btn.dataset.action));
+        }
+      });
+
+      refreshStatusBanner(service.name);
+    }
+
+    function selectTab(name) {
+      activeName = name;
+      renderTabs();
+      renderMain();
+    }
+
+    async function init() {
+      services = await fetchJson("/api/services");
+      selectTab(META_TABS[0].id);
+    }
+
+    init();
+  </script>
+</body>
+</html>

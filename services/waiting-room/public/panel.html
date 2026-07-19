@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>waiting-room</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, sans-serif;
+    margin: 0;
+    padding: 1.5rem;
+    background: #ffffff;
+    color: #1f2430;
+  }
+  h1 { font-size: 1.15rem; margin: 0 0 1rem; }
+  h2 { font-size: 0.95rem; margin: 0 0 0.75rem; color: #374151; font-weight: 700; }
+  p { line-height: 1.6; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+  .grid > .full { grid-column: 1 / -1; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+
+  .card { border: 1px solid #e2e5ea; border-radius: 10px; padding: 1rem 1.1rem; background: #fafbfc; }
+
+  button {
+    padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid #d1d5db;
+    background: #ffffff; color: #1f2430; cursor: pointer; font-size: 0.85rem;
+  }
+  button:hover { background: #f3f4f6; }
+  button.primary { background: #2f6feb; border-color: #2f6feb; color: #fff; }
+  button.primary:hover { background: #2660d1; }
+  button.danger { color: #b42318; border-color: #f3a6a0; }
+  button.danger:hover { background: #fef1f0; }
+
+  .my-ticket-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  .my-status .big { font-size: 1.6rem; font-weight: 700; }
+  .my-status.admitted .big { color: #1a7f4b; }
+  .my-status.waiting .big { color: #b1690a; }
+  .my-status.expired .big { color: #9ca3af; }
+  .my-status .sub { color: #6b7280; font-size: 0.85rem; }
+
+  .queue-summary { font-size: 0.85rem; color: #6b7280; margin-bottom: 0.75rem; }
+  .queue-summary strong { color: #1f2430; font-size: 1.1rem; }
+  .queue-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .ticket {
+    width: 2.6rem; height: 2.6rem; border-radius: 6px; background: #ffffff;
+    border: 1px solid #d1d5db; display: flex; align-items: center; justify-content: center;
+    font-size: 0.75rem; color: #6b7280;
+  }
+  .ticket.front { background: #fff4e0; border-color: #e0a030; color: #9a6400; font-weight: 700; }
+  .ticket.mine { background: #e6f4ea; border-color: #1a7f4b; color: #1a7f4b; font-weight: 700; }
+  .queue-more { display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 0.75rem; padding: 0 0.5rem; }
+
+  .form-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+  input[type="number"] { width: 5.5rem; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid #d1d5db; }
+  label { font-size: 0.8rem; color: #6b7280; display: flex; align-items: center; gap: 0.3rem; }
+  .hint { font-size: 0.78rem; color: #9ca3af; margin-top: 0.4rem; }
+
+  .log { font-family: ui-monospace, monospace; font-size: 0.78rem; color: #4b5563; max-height: 10rem; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 0.15rem; }
+  .log .empty { color: #9ca3af; }
+
+  .guide ol { padding-left: 1.2rem; margin: 0; }
+  .guide li { margin-bottom: 0.5rem; }
+  .guide code { background: #eef0f3; border-radius: 4px; padding: 0.05rem 0.35rem; font-size: 0.85em; }
+</style>
+</head>
+<body>
+  <h1>waiting-room · 대기열 패널</h1>
+
+  <div class="grid">
+    <div class="card">
+      <h2>내 티켓</h2>
+      <div class="my-ticket-row">
+        <button class="primary" id="join-btn">줄서기</button>
+        <div class="my-status" id="my-status"><span class="sub">아직 줄을 서지 않았습니다</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>부하 시뮬레이션</h2>
+      <p class="hint" style="margin-top:0">콘서트 예매처럼 짧은 시간에 등록이 몰리는 상황을 재현합니다.</p>
+      <div class="form-row">
+        <label>인원 <input type="number" id="burst-count" value="30" min="1" max="500"></label>
+        <label>분산(ms) <input type="number" id="burst-duration" value="2000" min="0"></label>
+        <button id="burst-btn">한번에 등록</button>
+        <button class="danger" id="burst-stop-btn" style="display:none">중지</button>
+        <button class="danger" id="reset-btn">초기화</button>
+      </div>
+      <div class="hint" id="burst-log"></div>
+    </div>
+
+    <div class="card full">
+      <h2>전체 대기열</h2>
+      <div class="queue-summary">대기 인원: <strong id="queue-count">-</strong>명</div>
+      <div class="queue-grid" id="queue-grid"></div>
+    </div>
+
+    <div class="card full">
+      <h2>이벤트 로그</h2>
+      <div class="log" id="event-log"><div class="empty">아직 이벤트가 없습니다</div></div>
+    </div>
+
+    <div class="card full guide">
+      <h2>테스트 방법</h2>
+      <ol>
+        <li><strong>순서/폴링 확인</strong> — "줄서기"를 누르면 <code>me-xxxxx</code> 형태의 유저로 즉시 등록됩니다. 내 티켓 카드의 숫자가 몇 번째인지, 전체 대기열 그리드의 초록 칸(내 티켓)이 어디 있는지 1초마다 갱신되는 걸 확인하세요.</li>
+        <li><strong>admission 확인</strong> — 서버는 기본 5초마다 앞쪽 10명을 자동으로 입장 허용 처리합니다(<code>ADMISSION_INTERVAL_MS</code>/<code>ADMISSION_BATCH_SIZE</code> 환경변수). 잠시 기다리면 대기 인원이 계단식으로 줄고, 내 티켓이 "입장 가능!"으로 바뀌는 걸 볼 수 있습니다.</li>
+        <li><strong>버스트(동시 접속) 확인</strong> — 인원수(예: 50)와 분산시간(예: 0ms = 완전 동시, 2000ms = 2초에 걸쳐 분산)을 넣고 "한번에 등록"을 누르세요. 대기 인원이 한 번에 확 쌓였다가, admission 주기마다 정확히 배치 크기만큼 빠지는 걸 이벤트 로그와 그리드로 동시에 확인할 수 있습니다.</li>
+        <li><strong>버스트 중지</strong> — 등록이 끝난 뒤에도 버튼은 "대기열에서 빼기"로 이름이 바뀌며 계속 떠 있습니다. admission이 다 빠질 때까지 기다리기 싫으면 언제든 눌러서 이 버스트가 등록한 사람만 대기열에서 바로 제거하세요("내 티켓"으로 따로 등록한 건 안 지워집니다).</li>
+        <li><strong>중복 등록 에러 확인</strong> — 같은 유저로 "줄서기"를 두 번 시도하면(브라우저 콘솔에서 같은 <code>userId</code>로 POST) <code>E9409</code> 에러가 나는 걸 API 응답으로 확인할 수 있습니다.</li>
+        <li><strong>초기화</strong> — 테스트를 반복하고 싶으면 "초기화" 버튼으로 대기열과 입장 허용 기록을 전부 지우고 처음부터 다시 시작할 수 있습니다.</li>
+        <li><strong>관측 지표</strong> — <a href="/metrics" target="_blank" rel="noopener">/metrics</a>에서 Prometheus 포맷으로 큐 길이(<code>waiting_room_queue_length</code>), 평균 대기시간(<code>waiting_room_wait_time_ms</code>), 누적 admission 수(<code>waiting_room_admissions_total</code>)를 직접 볼 수 있습니다.</li>
+      </ol>
+    </div>
+  </div>
+
+  <script>
+    const ROOM_ID = "default";
+    let myUserId = null;
+    let lastQueueLength = null;
+
+    function logEvent(text) {
+      const log = document.getElementById("event-log");
+      if (log.querySelector(".empty")) log.innerHTML = "";
+      const line = document.createElement("div");
+      const time = new Date().toLocaleTimeString("ko-KR", { hour12: false });
+      line.textContent = "[" + time + "] " + text;
+      log.prepend(line);
+      while (log.children.length > 50) log.removeChild(log.lastChild);
+    }
+
+    function renderMyStatus(data) {
+      const el = document.getElementById("my-status");
+      if (!myUserId) {
+        el.className = "my-status";
+        el.innerHTML = '<span class="sub">아직 줄을 서지 않았습니다</span>';
+        return;
+      }
+      if (data.status === "admitted") {
+        el.className = "my-status admitted";
+        el.innerHTML = '<div class="big">입장 가능!</div><div class="sub">' + myUserId + "</div>";
+      } else if (data.status === "waiting") {
+        el.className = "my-status waiting";
+        el.innerHTML =
+          '<div class="big">' + data.position + "번째</div><div class=\"sub\">" + myUserId + " · 전체 " + data.queueLength + "명 대기</div>";
+      } else if (data.status === "expired") {
+        el.className = "my-status expired";
+        el.innerHTML = '<div class="big">입장 시간 만료</div><div class="sub">' + myUserId + " — 다시 줄서기가 필요합니다</div>";
+      } else {
+        el.className = "my-status";
+        el.innerHTML = '<span class="sub">' + myUserId + " — 대기열에 없음</span>";
+      }
+    }
+
+    async function joinQueue() {
+      myUserId = "me-" + Math.random().toString(36).slice(2, 8);
+      const res = await fetch("/rooms/" + ROOM_ID + "/waiting-users", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: myUserId }),
+      });
+      const body = await res.json();
+      logEvent(res.ok ? myUserId + " 등록 완료 (순번 " + body.data.position + ")" : "등록 실패: " + JSON.stringify(body));
+      await refreshMyStatus();
+    }
+
+    async function resetQueue() {
+      await fetch("/rooms/" + ROOM_ID + "/waiting-users", { method: "DELETE" });
+      myUserId = null;
+      lastQueueLength = null;
+      renderMyStatus({});
+      logEvent("대기열 초기화");
+      await refreshQueue();
+    }
+
+    async function refreshMyStatus() {
+      if (!myUserId) return renderMyStatus({});
+      const res = await fetch("/rooms/" + ROOM_ID + "/waiting-users/" + myUserId);
+      const body = await res.json();
+      renderMyStatus(body.data ?? {});
+    }
+
+    async function refreshQueue() {
+      const res = await fetch("/rooms/" + ROOM_ID + "/waiting-users");
+      const body = await res.json();
+      const data = body.data ?? { queueLength: 0, waiting: [] };
+
+      if (lastQueueLength !== null && data.queueLength < lastQueueLength) {
+        logEvent("admission 감지: " + lastQueueLength + "명 → " + data.queueLength + "명 (" + (lastQueueLength - data.queueLength) + "명 입장 허용 추정)");
+      }
+      lastQueueLength = data.queueLength;
+
+      document.getElementById("queue-count").textContent = data.queueLength;
+
+      const grid = document.getElementById("queue-grid");
+      const shown = data.waiting.slice(0, 20);
+      grid.innerHTML = shown
+        .map((w) => {
+          const cls = ["ticket"];
+          if (w.position <= 3) cls.push("front");
+          if (w.userId === myUserId) cls.push("mine");
+          return '<div class="' + cls.join(" ") + '" title="' + w.userId + '">' + w.position + "</div>";
+        })
+        .join("");
+
+      if (data.queueLength > shown.length) {
+        grid.innerHTML += '<div class="queue-more">+' + (data.queueLength - shown.length) + "명</div>";
+      }
+    }
+
+    // 실행 중인 버스트의 상태(예약된 타이머, 진행 중인 요청)를 들고 있는다 — null이면 실행 중 아님.
+    // "한번에 등록"은 전부 setTimeout으로 미리 예약해두는 방식이라, 중지하려면 (1)아직 안 쏜
+    // 예약을 clearTimeout으로 취소하고 (2)이미 나간 요청은 AbortController로 중단해야 한다.
+    let burstState = null;
+
+    function setBurstRunning(running) {
+      document.getElementById("burst-btn").disabled = running;
+      document.getElementById("burst-stop-btn").style.display = running ? "inline-block" : "none";
+    }
+
+    // 중지 = 앞으로의 등록 요청 취소 + "이미 등록된 사람도 대기열에서 뺀다"까지 포함한다
+    // (그냥 멈추기만 하면 admission 배치가 다 처리할 때까지 몇 분씩 대기열에 남아있게 된다 —
+    // 그게 싫어서 만든 버튼이니 등록분도 같이 취소한다). 이미 admission된 사람은 대기열에
+    // 없으니 remove가 그냥 무시한다 — 안전하다. 전체를 지우는 reset()과 달리 이 버스트가
+    // 등록한 사람만 골라서 지우므로 "내 티켓"으로 등록해둔 건 안 건드린다.
+    // 등록 자체는 금방 끝나지만 admission 드레인은 한참 걸리므로, 이 버튼은 등록 중은 물론
+    // 등록이 끝난 뒤(runBurst의 finally)에도 계속 떠 있는다 — 그래야 "등록은 끝났지만
+    // 아직 대기열엔 남아있는" 구간에서도 중지(=제거)할 수 있다.
+    async function stopBurst() {
+      if (!burstState) return;
+      const state = burstState;
+      state.cancelled = true;
+      state.timers.forEach((timer) => clearTimeout(timer));
+      state.controllers.forEach((controller) => controller.abort());
+      burstState = null;
+      setBurstRunning(false);
+
+      const log = document.getElementById("burst-log");
+      log.textContent = "중지 중… 대기열에서 정리하는 중";
+
+      const res = await fetch("/rooms/" + ROOM_ID + "/waiting-users/remove", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userIds: state.allUserIds }),
+      });
+      const body = await res.json();
+      const removed = body.data ? body.data.removed : 0;
+
+      log.textContent = "중지함 — " + state.done + "/" + state.count + "건 요청 처리됨, 대기열에서 " + removed + "명 제거";
+      logEvent("버스트 중지 — 대기열에서 " + removed + "명 제거함");
+      await refreshQueue();
+    }
+
+    function runBurst() {
+      if (burstState) return; // 이미 실행 중이면 무시
+
+      const count = Number(document.getElementById("burst-count").value) || 30;
+      const durationMs = Number(document.getElementById("burst-duration").value) || 0;
+      const state = { cancelled: false, count, ok: 0, done: 0, timers: [], controllers: [], allUserIds: [] };
+      burstState = state;
+      setBurstRunning(true);
+      document.getElementById("burst-stop-btn").textContent = "중지";
+
+      const log = document.getElementById("burst-log");
+      log.textContent = "0/" + count + "명 등록 중…";
+      logEvent(count + "명 버스트 시작 (" + durationMs + "ms에 걸쳐 분산)");
+
+      for (let i = 0; i < count; i++) {
+        const userId = "burst-" + Date.now() + "-" + i;
+        state.allUserIds.push(userId);
+        const scheduledAt = durationMs > 0 ? (durationMs * i) / count : 0;
+
+        const timer = setTimeout(() => {
+          if (state.cancelled) return;
+          const controller = new AbortController();
+          state.controllers.push(controller);
+
+          fetch("/rooms/" + ROOM_ID + "/waiting-users", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ userId }),
+            signal: controller.signal,
+          })
+            .then((res) => {
+              if (state.cancelled) return;
+              state.done++;
+              if (res.ok) state.ok++;
+              log.textContent = state.ok + "/" + count + "명 등록 중… (" + state.done + "/" + count + " 처리됨)";
+            })
+            .catch(() => {
+              if (!state.cancelled) state.done++;
+            })
+            .finally(() => {
+              if (!state.cancelled && state.done === count) {
+                log.textContent =
+                  state.ok + "/" + count + "명 등록 완료 — 아직 대기열에 있습니다. 그만두려면 \"대기열에서 빼기\"를 누르세요.";
+                logEvent(state.ok + "/" + count + "명 버스트 등록 완료 (admission 대기 중)");
+                // 등록은 끝났어도 admission이 다 처리할 때까지 대기열에는 그대로 남아있다.
+                // 여기서 버튼을 숨기면 그 사이에는 중지할 방법이 없어지므로, 등록 완료 후에도
+                // 버튼은 유지하고 역할만 "등록 취소"에서 "대기열에서 빼기"로 바꾼다.
+                document.getElementById("burst-stop-btn").textContent = "대기열에서 빼기";
+              }
+            });
+        }, scheduledAt);
+
+        state.timers.push(timer);
+      }
+    }
+
+    document.getElementById("join-btn").addEventListener("click", joinQueue);
+    document.getElementById("burst-btn").addEventListener("click", runBurst);
+    document.getElementById("burst-stop-btn").addEventListener("click", stopBurst);
+    document.getElementById("reset-btn").addEventListener("click", resetQueue);
+
+    refreshQueue();
+    setInterval(refreshQueue, 1000);
+    setInterval(refreshMyStatus, 1000);
+  </script>
+</body>
+</html>

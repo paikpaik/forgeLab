@@ -1,0 +1,28 @@
+services:
+  app:
+    build:
+      context: .
+      secrets:
+        - npm_token
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    environment:
+      PORT: 3000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      ROOM_ID: default
+      ADMISSION_INTERVAL_MS: 5000
+      ADMISSION_BATCH_SIZE: 10
+      ADMITTED_TOKEN_TTL_SECONDS: 300
+      ADMISSION_TOKEN_SECRET: ${ADMISSION_TOKEN_SECRET:-dev-secret}
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+secrets:
+  npm_token:
+    environment: NODE_AUTH_TOKEN

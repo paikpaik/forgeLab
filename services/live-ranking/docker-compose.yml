@@ -1,0 +1,57 @@
+services:
+  ingest:
+    build:
+      context: .
+      secrets:
+        - npm_token
+    command: node dist/ingest/main.js
+    restart: unless-stopped
+    ports:
+      - "${INGEST_PORT:-3100}:3100"
+    environment:
+      PORT: 3100
+      KAFKA_BROKERS: redpanda:9092
+    depends_on:
+      - redpanda
+
+  aggregator:
+    build:
+      context: .
+      secrets:
+        - npm_token
+    command: node dist/aggregator/main.js
+    restart: unless-stopped
+    ports:
+      - "${AGGREGATOR_PORT:-3101}:3101"
+    environment:
+      PORT: 3101
+      KAFKA_BROKERS: redpanda:9092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      IDEMPOTENCY_TTL_SECONDS: 3600
+    depends_on:
+      - redpanda
+      - redis
+
+  redis:
+    image: redis:7-alpine
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:29092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:29092
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=info
+    ports:
+      # 카프카 프로토콜(호스트 디버깅용) — kafka-forge 참고 compose의 19092와 겹치지 않게 분리
+      - "29092:29092"
+
+secrets:
+  npm_token:
+    environment: NODE_AUTH_TOKEN
