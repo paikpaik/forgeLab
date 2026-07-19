@@ -1,0 +1,71 @@
+services:
+  api:
+    build:
+      context: .
+      secrets:
+        - npm_token
+    command: node dist/api/main.js
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-3200}:3200"
+    environment:
+      PORT: 3200
+      KAFKA_BROKERS: redpanda:9092
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: order_outbox
+      OUTBOX_PUBLISH_INTERVAL_MS: 5000
+      OUTBOX_PUBLISH_BATCH_SIZE: 50
+    depends_on:
+      - redpanda
+      - postgres
+
+  fulfillment:
+    build:
+      context: .
+      secrets:
+        - npm_token
+    command: node dist/fulfillment/main.js
+    restart: unless-stopped
+    ports:
+      - "${FULFILLMENT_PORT:-3201}:3201"
+    environment:
+      PORT: 3201
+      KAFKA_BROKERS: redpanda:9092
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: order_outbox
+    depends_on:
+      - redpanda
+      - postgres
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: order_outbox
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:29093
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:29093
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=info
+    ports:
+      # 카프카 프로토콜(호스트 디버깅용) — live-ranking의 29092와 겹치지 않게 분리
+      - "29093:29093"
+
+secrets:
+  npm_token:
+    environment: NODE_AUTH_TOKEN
