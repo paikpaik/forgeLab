@@ -16,6 +16,20 @@ import { idempotencyKey, IDEMPOTENCY_TTL_SECONDS } from "../shared/constants";
 export class RedisIdempotencyStore implements IdempotencyStore {
   constructor(@InjectRedis() private readonly redis: ForgeRedisClient) {}
 
+  // kafka-forge 1.0.3부터 claim이 있으면 StandardConsumer가 핸들러 실행 *전에* 이걸로
+  // 원자적으로 선점하고, wasProcessed/markProcessed(사후 마킹)는 더 이상 호출하지 않는다
+  // (proposals/kafka-forge/20260717-idempotency-claim-before-effect.md 반영) — "이펙트 적용
+  // 후 마킹 전" 크래시 윈도우에서 중복 반영되던 문제가 이걸로 없어진다. 기존에 SET으로 직접
+  // 구현했던 걸, 이미 있는 분산 락(SET NX PX, unlock은 호출하지 않고 TTL로만 만료)으로
+  // 대체했다 — 원자적 "없을 때만 쓰기"가 필요한 지점이라 lock()의 시맨틱과 정확히 맞는다.
+  async claim(key: string): Promise<boolean> {
+    const token = await this.redis.lock(idempotencyKey("score-event", key), IDEMPOTENCY_TTL_SECONDS);
+    return token !== null;
+  }
+
+  // claim이 있는 한 StandardConsumer는 이제 이 둘을 호출하지 않는다 — 인터페이스가 필수로
+  // 요구해서 남겨두지만, 실질적으로는 죽은 코드다. 직접 저장소 상태를 확인하는 테스트/디버깅
+  // 용도로는 여전히 쓸 수 있다.
   async wasProcessed(key: string): Promise<boolean> {
     return (await this.redis.get(idempotencyKey("score-event", key))) !== null;
   }

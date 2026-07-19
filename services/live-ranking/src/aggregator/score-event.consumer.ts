@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import type { Kafka } from "kafkajs";
 import { StandardConsumer } from "@paikpaik/kafka-forge";
-import { AGGREGATOR_CONSUMER_GROUP_ID, KAFKA_INSTANCE } from "../shared/constants";
+import { AGGREGATOR_CONSUMER_GROUP_ID, DLQ_TEST_USER_ID, KAFKA_INSTANCE } from "../shared/constants";
 import { ScoreEvent } from "../shared/score-event.contract";
 import { RankingService } from "./ranking.service";
 import { RedisIdempotencyStore } from "./redis-idempotency-store";
@@ -29,6 +29,11 @@ export class ScoreEventConsumer implements OnModuleInit, OnModuleDestroy {
     await this.consumer.subscribe(
       ScoreEvent,
       async (payload) => {
+        // panel.html의 "DLQ 테스트" 버튼이 이 userId로 이벤트를 보낸다 — DLQ가 실제로
+        // 채워지는 걸 눈으로 보려면 재현 가능하게 실패시킬 방법이 필요해서 만든 테스트 훅.
+        if (payload.userId === DLQ_TEST_USER_ID) {
+          throw new Error(`DLQ 테스트용 강제 실패 (userId=${DLQ_TEST_USER_ID})`);
+        }
         await this.rankingService.applyDelta(payload.leaderboardId, payload.userId, payload.delta);
       },
       {

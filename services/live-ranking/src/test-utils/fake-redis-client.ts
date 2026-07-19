@@ -5,6 +5,7 @@
 export class FakeRedisClient {
   private readonly zsets = new Map<string, Map<string, number>>();
   private readonly strings = new Map<string, { value: string; expiresAt: number | null }>();
+  private readonly lists = new Map<string, unknown[]>();
 
   async zincrby(key: string, member: string, increment: number): Promise<number> {
     const zset = this.zsets.get(key) ?? new Map<string, number>();
@@ -41,8 +42,26 @@ export class FakeRedisClient {
     for (const key of keys) {
       if (this.zsets.delete(key)) count++;
       if (this.strings.delete(key)) count++;
+      if (this.lists.delete(key)) count++;
     }
     return count;
+  }
+
+  async lpush(key: string, ...values: unknown[]): Promise<number> {
+    const list = this.lists.get(key) ?? [];
+    list.unshift(...values.slice().reverse());
+    this.lists.set(key, list);
+    return list.length;
+  }
+
+  async lrange<T>(key: string, start: number, stop: number): Promise<T[]> {
+    const list = this.lists.get(key) ?? [];
+    const end = stop === -1 ? list.length : stop + 1;
+    return list.slice(start, end) as T[];
+  }
+
+  async llen(key: string): Promise<number> {
+    return (this.lists.get(key) ?? []).length;
   }
 
   async get(key: string): Promise<string | null> {
@@ -58,5 +77,13 @@ export class FakeRedisClient {
   async set(key: string, value: string, ttlSeconds?: number): Promise<void> {
     const expiresAt = ttlSeconds ? Date.now() + ttlSeconds * 1000 : null;
     this.strings.set(key, { value, expiresAt });
+  }
+
+  // 실제 구현(SET NX PX)과 동일한 시맨틱만 흉내낸다 — 이미 있으면 null, 없으면 토큰 발급 후 저장.
+  async lock(key: string, ttlSeconds: number): Promise<string | null> {
+    if ((await this.get(key)) !== null) return null;
+    const token = Math.random().toString(36).slice(2);
+    await this.set(key, token, ttlSeconds);
+    return token;
   }
 }

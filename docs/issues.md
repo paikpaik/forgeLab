@@ -21,8 +21,9 @@ forge-lab에서 `@paikpaik/node-forge`, `@paikpaik/kafka-forge`를 실 소비자
 |---|---|---|---|
 | 1.0.2 | LOW (관측성 gap) | `IdempotencyStore`로 걸러낸 메시지 수를 재는 자체 지표(`kafka_forge_*`)가 없어서, 소비 서비스마다 각자 다른 이름/라벨로 직접 재야 했음 — 여러 서비스를 한 대시보드에서 비교하기 어려움 | `StandardConsumer`가 dedup으로 스킵될 때 `kafka_forge_deduped_total{topic,group}`을 자체적으로 증가시키도록 추가 |
 | 1.0.2 | LOW (관측성 gap) | 자체 지표(`producedTotal` 등)가 모듈 로드 시점에 고정 싱글턴 `metricsRegistry`에만 등록돼서, 소비 서비스가 자기 Registry(예: node-forge `ForgeMetrics.registry`)와 합쳐 하나의 `/metrics`로 노출할 방법이 없었음 — 서비스마다 `/metrics`와 `/metrics/kafka`를 따로 노출해야 했음 | `registerMetricsInto(registry)` export 추가 — 이미 만들어진 지표를 외부 Registry에도 등록. 하위 호환 유지(기존 `metricsRegistry` 노출은 그대로) |
+| 1.0.3 | HIGH (데이터 정합성) | `StandardConsumer.processMessage()`가 "체크 → 이펙트 적용 → 마킹(사후)" 순서라서, 이펙트 적용 후 마킹 전에 컨슈머가 죽거나(크래시) 컨슈머 그룹 리밸런스로 파티션을 빼앗기면, 재배달 시 `wasProcessed`가 여전히 false라서 이펙트가 중복 적용됨 — `IdempotencyStore`가 막아야 하는 정확히 그 상황에서 못 막음 | `IdempotencyStore`에 선택적 `claim(key)` 추가 — 있으면 핸들러 실행 **전**에 원자적으로 선점하고, 사후 `markProcessed` 호출은 스킵. `claim`을 구현하지 않은 기존 저장소는 이전 동작 그대로(하위 호환) |
 
-live-ranking(2번째 실험)에서 처음 kafka-forge를 실 소비자로 붙이며 위 두 건을 발견 → 제안 →
+live-ranking(2번째 실험)에서 처음 kafka-forge를 실 소비자로 붙이며 위 세 건을 발견 → 제안 →
 반영까지 확인. 그 외 producer/consumer/재시도/DLQ/IdempotencyStore 인터페이스는 갭 없이
 그대로 사용 가능했음.
 

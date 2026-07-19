@@ -1,5 +1,95 @@
 ## 플랜 실행 이력
 
+### 후속: 2026-07-19 (DLQ 관측성 확보)
+
+냉정한 분석에서 발견한 MEDIUM 이슈 중 마지막으로 남아있던 걸 처리 — "재시도 소진된 이벤트를
+아무도 볼 방법이 없다."
+
+**실제 변경 파일**:
+- `src/shared/score-event.contract.ts` — `ScoreEventDlq`(`EventContract` 리터럴로 `defineEvent()`
+  우회), `DlqEnvelopeSchema` 추가
+- `src/aggregator/dlq-log.service.ts`, `dlq.controller.ts`, `score-event-dlq.consumer.ts` — 신규
+- `src/aggregator/score-event.consumer.ts` — `DLQ_TEST_USER_ID` 포이즌 필 훅 추가
+- `src/aggregator/aggregator.module.ts` — 위 3개 신규 provider/controller 등록
+- `public/panel.html` — "DLQ (실패한 이벤트)" 카드 + 버튼 2개
+- `src/test-utils/fake-redis-client.ts` — `lpush`/`lrange`/`llen` 추가
+- `src/aggregator/dlq-log.service.test.ts` — 신규 3건
+- `ARCHITECTURE.md` — mermaid에 DLQ consumer 노드 추가, API/키/토픽 표, 설계 결정 갱신
+
+**계획과의 차이**: 없음. 다만 구현 중 발견 — `toDlqTopicName()`이 만든 토픽명은 kafka-forge
+자신의 네이밍 컨벤션을 어겨서 `defineEvent()`를 못 쓴다는 걸 알게 됨 → `EventContract`를
+리터럴로 직접 구성해서 우회(제안서 없이 해결 가능한 수준이라 별도 proposal 없음).
+
+**검증**: `__dlq-test__` userId로 이벤트 발행 → 실제로 재시도 3회 소진 → DLQ 이동 →
+`live-ranking-dlq-viewer` 컨슈머가 픽업 → `GET /dlq`에 정확한 내용으로 기록되는 것까지
+end-to-end로 재현 확인(이전 claim 검증 때와 달리 이번엔 타이밍 문제 없이 실제로 전체
+경로를 재현할 수 있었음). vitest 24개 전부 통과.
+
+**잔존 작업**: 냉정한 분석에서 나온 항목 전부 처리 완료(HIGH: claim, MEDIUM: 패널 멱등성
+시연, MEDIUM: DLQ 관측성). LOW 2건(delta 상/하한 미검증, 헬스체커 연결 재사용 안 함)은
+미착수 — 필요해지면 별도 요청.
+
+---
+
+### 후속: 2026-07-18 (kafka-forge 1.0.3 반영 — claim으로 크래시 윈도우 제거)
+
+`proposals/kafka-forge/20260717-idempotency-claim-before-effect.md`가 1.0.3으로 반영됨.
+
+**실제 변경 파일**:
+- `package.json` — `@paikpaik/kafka-forge` `^1.0.2` → `^1.0.3`
+- `src/aggregator/redis-idempotency-store.ts` — `claim(key)` 추가, node-forge
+  `ForgeRedisClient.lock()`(기존 SET NX PX 분산 락) 재사용. `wasProcessed`/`markProcessed`는
+  인터페이스 호환용으로 남김(더 이상 `StandardConsumer`가 호출하지 않음)
+- `src/test-utils/fake-redis-client.ts` — `lock()` 흉내 추가
+- `src/aggregator/redis-idempotency-store.test.ts` — `claim` 원자성 테스트 3건 추가
+- `ARCHITECTURE.md`, `docs/issues.md` — 반영 내용 문서화
+
+**계획과의 차이**: 없음 — 제안서에 적어둔 API(`claim(key): Promise<boolean>`) 그대로 반영됨.
+
+**검증**: Docker 재빌드 후 기본 멱등성 스모크(같은 eventId 2회 발행 → 점수 유지) 재확인,
+vitest 21개 전부 통과. **한계**: 원래 버그였던 "크래시가 정확히 이펙트 적용 후 마킹 전에
+나는" 타이밍은 외부에서 재현하기 어려워 실제로 프로세스를 그 순간에 죽여보는 테스트는
+안 했음 — `claim`의 원자성 계약(유닛 테스트)과 kafka-forge 소스의 실제 호출 순서 확인으로
+대신함.
+
+**잔존 작업**: DLQ 관측성 문제(냉정한 분석에서 발견, MEDIUM)는 여전히 미착수.
+
+---
+
+### 후속: 2026-07-17 (냉정한 분석 → kafka-forge 제안서 → 패널 개선)
+
+사용자가 "냉정하게 live-ranking 패널을 바라보고 개선점이 있는지" 요청 — waiting-room 때와
+같은 패턴으로 코드를 다시 읽으며 검토했다.
+
+**발견한 것**:
+- HIGH — `StandardConsumer.processMessage()`가 "체크 → 이펙트 적용 → 마킹" 순서라, 이펙트
+  적용 후 마킹 전에 크래시/컨슈머 그룹 리밸런스가 나면 재배달 시 중복 반영됨. `IdempotencyStore`
+  구현으로는 못 막는, 라이브러리 호출 순서 자체의 문제
+- MEDIUM — 패널의 봇 시뮬레이션/+10점 버튼이 매번 새 `eventId`를 써서, 이 실험의 핵심(멱등성)을
+  UI로는 전혀 검증할 수 없었음
+- MEDIUM — DLQ로 넘어간 이벤트를 확인할 관측 수단이 없음 (이번 회차에서는 미착수, 범위 밖)
+- LOW — delta 상/하한 미검증, 헬스체커가 호출마다 Kafka Admin 연결을 새로 엶
+
+**실제 변경 파일**:
+- `proposals/kafka-forge/20260717/20260717-idempotency-claim-before-effect.md` — 신규.
+  `IdempotencyStore`에 이펙트 적용 "전" 원자적 선점(`claim`) 옵션 추가 제안. `RedisIdempotencyStore`
+  구현은 node-forge `ForgeRedisClient.lock()`(기존 SET NX PX 분산 락)을 그대로 재사용하면
+  돼서 node-forge 쪽 제안서는 불필요
+- `public/panel.html` — "멱등성 확인" 카드 추가("같은 이벤트 두 번 보내기" 버튼), `delay()`/
+  `fetchUserRank()` 헬퍼 추가, 가이드 문구를 devtools 안내에서 버튼 안내로 수정, `/metrics/kafka`
+  참조를 `/metrics`로 정정(이전 회차에서 통합됐는데 가이드 텍스트가 안 갱신돼 있던 것도 같이 고침)
+- `ARCHITECTURE.md` — 설계 결정 표에 패널 개선 항목과 "미해결" 멱등성 순서 문제 추가
+
+**계획과의 차이**: 없음 — 사용자가 승인한 순서(제안서 작성 → 패널 버튼 추가) 그대로 진행.
+
+**검증**: Docker 재빌드 후 panel.html에 새 버튼 반영 확인(`grep -c`). curl로 같은 eventId 2회
+발행 → 점수 유지(15점 → 15점), `kafka_forge_deduped_total` 증가 확인.
+
+**잔존 작업**: kafka-forge `claim` 제안은 아직 미반영(사용자가 실제 배포하면 이전처럼 로컬
+우회 걷어내고 반영 예정). DLQ 관측성 문제는 이번 회차에서 다루지 않음 — 필요해지면 별도 작업으로.
+
+---
+
 ### 후속: 2026-07-17 (kafka-forge 1.0.2 반영, 로컬 우회 제거)
 
 개발 중 발견한 두 가지 관측성 gap(멱등성 스킵 카운터 없음, 지표 레지스트리 병합 불가)을

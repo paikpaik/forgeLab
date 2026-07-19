@@ -27,3 +27,23 @@ describe("RedisIdempotencyStore", () => {
     expect(await store.wasProcessed("event-2")).toBe(false);
   });
 });
+
+describe("RedisIdempotencyStore.claim", () => {
+  it("처음 선점하면 true", async () => {
+    const { store } = createStore();
+    expect(await store.claim("event-1")).toBe(true);
+  });
+
+  it("같은 키를 두 번째 선점하면 false — 이펙트를 두 번 실행하지 않게 막는 지점", async () => {
+    const { store } = createStore();
+    expect(await store.claim("event-1")).toBe(true);
+    expect(await store.claim("event-1")).toBe(false);
+    expect(await store.claim("event-1")).toBe(false);
+  });
+
+  it("다른 키는 독립적으로 선점 가능", async () => {
+    const { store } = createStore();
+    expect(await store.claim("event-1")).toBe(true);
+    expect(await store.claim("event-2")).toBe(true);
+  });
+});
