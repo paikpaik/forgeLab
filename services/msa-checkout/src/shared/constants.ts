@@ -1,5 +1,11 @@
+// 인증/인가는 node-forge/auth(JwtAuthModule, JwtAuthGuard, RolesGuard)를 그대로 쓴다 — Role은
+// 이 서비스의 도메인 타입이라 forge가 아니라 여기서 정의한다(forge의 RolesGuard는 role을
+// string으로만 다뤄서 특정 타입을 강제하지 않는다).
+export type Role = "customer" | "admin";
+
 export const AUTH_TOKEN_SECRET = process.env.AUTH_TOKEN_SECRET ?? "msa-checkout-lab-secret";
-// @nestjs/jwt(JwtModule.register)의 signOptions.expiresIn에 그대로 넘기는 형식(ms 라이브러리 문자열).
+// node-forge/auth의 signToken()/JwtAuthModule.forRoot()에 그대로 넘기는 형식(jsonwebtoken의
+// expiresIn 문자열, 예: "15m").
 export const AUTH_TOKEN_TTL = process.env.AUTH_TOKEN_TTL ?? "15m";
 
 export const HEALTH_CHECK_CACHE_MS = 5000;

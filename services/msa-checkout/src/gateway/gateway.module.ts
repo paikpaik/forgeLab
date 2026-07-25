@@ -1,11 +1,9 @@
+import { join } from "node:path";
 import { Module } from "@nestjs/common";
 import { ClientsModule } from "@nestjs/microservices";
-import { JwtModule } from "@nestjs/jwt";
-import { grpcClientOptions } from "../shared/grpc-client.util";
+import { createGrpcClientOptions } from "@paikpaik/node-forge/grpc/nestjs";
+import { JwtAuthModule, JwtAuthGuard, RolesGuard } from "@paikpaik/node-forge/auth/nestjs";
 import { AUTH_TOKEN_SECRET, AUTH_TOKEN_TTL } from "../shared/constants";
-import { AuthTokenService } from "../shared/auth/auth-token.service";
-import { AuthGuard } from "../shared/auth/auth.guard";
-import { RolesGuard } from "../shared/auth/roles.guard";
 import { AuthController } from "./auth.controller";
 import { CheckoutController } from "./checkout.controller";
 import { AdminController } from "./admin.controller";
@@ -17,19 +15,27 @@ const INVENTORY_SERVICE_URL = process.env.INVENTORY_SERVICE_URL ?? "localhost:50
 
 @Module({
   imports: [
-    JwtModule.register({
-      secret: AUTH_TOKEN_SECRET,
-      signOptions: { expiresIn: AUTH_TOKEN_TTL },
-    }),
+    JwtAuthModule.forRoot({ secret: AUTH_TOKEN_SECRET, expiresIn: AUTH_TOKEN_TTL }),
     ClientsModule.register([
-      { name: ORCHESTRATOR_GRPC_PACKAGE, ...grpcClientOptions("checkout", "checkout.proto", ORCHESTRATOR_URL) },
+      {
+        name: ORCHESTRATOR_GRPC_PACKAGE,
+        ...createGrpcClientOptions({
+          packageName: "checkout",
+          protoPath: join(__dirname, "..", "..", "proto", "checkout.proto"),
+          target: ORCHESTRATOR_URL,
+        }),
+      },
       {
         name: INVENTORY_ADMIN_GRPC_PACKAGE,
-        ...grpcClientOptions("inventory", "inventory.proto", INVENTORY_SERVICE_URL),
+        ...createGrpcClientOptions({
+          packageName: "inventory",
+          protoPath: join(__dirname, "..", "..", "proto", "inventory.proto"),
+          target: INVENTORY_SERVICE_URL,
+        }),
       },
     ]),
   ],
   controllers: [AuthController, CheckoutController, AdminController],
-  providers: [AuthTokenService, AuthGuard, RolesGuard, OrchestratorGrpcClient, InventoryAdminGrpcClient],
+  providers: [JwtAuthGuard, RolesGuard, OrchestratorGrpcClient, InventoryAdminGrpcClient],
 })
 export class GatewayModule {}

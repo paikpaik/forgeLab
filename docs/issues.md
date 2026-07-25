@@ -16,6 +16,9 @@ forge-lab에서 `@paikpaik/node-forge`, `@paikpaik/kafka-forge`를 실 소비자
 | 1.0.1 | HIGH | `package.json`의 `exports` 맵 전체(`.`, `./core`, `./response/nestjs` 등)가 `require` 조건에서 존재하지 않는 `.cjs` 파일을 가리켜, `require()`로는 어떤 서브패스도 로드 불가 | `require`는 실제 산출물(`.js`), `import`는 `.mjs`를 가리키도록 exports 맵 전면 수정 |
 | 1.0.1 | MEDIUM | `ResponseInterceptor`(성공 응답 `ok()` 래핑)는 있는데 짝이 되는 에러 필터가 없어서, 서비스마다 `ForgeBizError`→`fail()` 변환을 직접 구현해야 했음 | `response/nestjs`에 `ForgeExceptionFilter` 추가 (`HttpAdapterHost` 사용, Express/Fastify 어댑터 모두 지원) |
 | 1.0.1 | MEDIUM | `HealthModule.forRoot()`가 체커를 모듈 정의 시점에 동기적으로 받아서, `RedisModule`이 DI로 만든 `ForgeRedisClient` 인스턴스를 헬스체커가 재사용할 방법이 없었음 | `RedisModule`/`LoggerModule`과 동일한 `useFactory`/`inject` 패턴으로 `HealthModule.forRootAsync` 추가 |
+| 1.0.5 | MEDIUM (기능 gap) | gRPC 클라이언트를 쓰는 서비스가 다중 인스턴스로 스케일될 때, grpc-js 기본 LB 정책(`pick_first`)이 최초 연결한 인스턴스에 고정돼서 나머지 인스턴스가 트래픽을 못 받음(조용히 실패, 에러 없음) — msa-checkout에서 `docker stats` NET I/O 실측으로 재현·검증 | `grpc` 모듈 신설(`buildGrpcClientChannelOptions`/`createGrpcClientOptions` 등) — `dns:///` 스킴 + `round_robin` LB가 기본값 |
+| 1.0.5 | MEDIUM (기능 gap) | bearer 토큰 인증이 필요한 서비스마다 HMAC/JWT를 직접 구현해야 했음(waiting-room, msa-checkout이 구조적으로 동일한 코드를 두 번 작성) | `auth` 모듈 신설(`signToken`/`verifyToken`, `auth/nestjs`의 `JwtAuthModule`/`JwtAuthGuard`/`RolesGuard`/`Roles`) — Account 영속화나 refresh-token 등은 스코프 제외, 발급/검증/가드까지만 |
+| 1.0.6 | HIGH | 1.0.5에서 막 추가된 `auth/nestjs`의 `RolesGuard`가 생성자의 `Reflector` 타입 추론에만 의존(파라미터 데코레이터 없음)하는데, tsup(esbuild) 빌드가 `emitDecoratorMetadata`의 `design:paramtypes`를 방출하지 않아 실제 배포된 `dist`에서는 `Reflector`가 `undefined`로 주입됨 — `@Roles()`가 붙은 모든 라우트가 500. 소스 레벨 테스트로는 못 잡고 실제 설치해서 실행해야만 드러남 | `constructor(@Inject(Reflector) private readonly reflector: Reflector)`로 파라미터 데코레이터 명시. 같은 원인의 버그가 있던 `EventsExplorer`(discovery/scanner/reflector)도 함께 발견해 동일하게 수정. 스모크 테스트에 `self:paramtypes` 메타데이터 검증 + `EventsModule` 실제 부팅 테스트를 추가해 이런 종류의 버그를 CI에서 재발 방지 |
 
 ## @paikpaik/kafka-forge
 
@@ -34,6 +37,11 @@ live-ranking(2번째 실험)에서 처음 kafka-forge를 실 소비자로 붙이
 확인. order-outbox(3번째 실험)에서 `OutboxPublisher`/`OutboxStore`를 실 소비자로 붙이며 위
 1.0.5 이슈 2건을 추가로 발견 → 제안 → 반영까지 확인. 그 외 producer/consumer/재시도/DLQ/
 IdempotencyStore 인터페이스는 갭 없이 그대로 사용 가능했음.
+
+msa-checkout(4번째 실험)이 처음으로 node-forge에 `grpc`/`auth` 신규 모듈을 요청 → 1.0.5로
+반영 확인. 반영된 `auth/nestjs`의 `RolesGuard`에서 새 버그(실제 배포 `dist`에서 `Reflector`
+DI 실패)를 발견해 제안서 작성 → 1.0.6으로 즉시 수정 반영까지 확인(로컬 서브클래싱 우회 코드는
+반영 즉시 제거하고 원래대로 되돌림).
 
 ---
 

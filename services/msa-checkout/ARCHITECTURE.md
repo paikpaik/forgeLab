@@ -150,7 +150,7 @@ admin 라우트 전용).
 
 | 결정 | 이유 |
 |---|---|
-| gRPC/인증을 node-forge로 바로 올리지 않고 로컬 구현 후 검증 | 이 실험이 처음 필요로 하는 영역이라 API 모양을 검증 없이 추측하지 않기 위해서(`principles.md`의 "두 번째 필요 사례가 생길 때 추출" — s3-forge를 기각했던 것과 같은 논리). gRPC 라운드로빈 헬퍼는 검증 후 제안서 작성 완료(`proposals/node-forge/20260725/20260725-grpc-multi-instance-lb.md`) |
+| gRPC/인증은 처음엔 로컬 구현 후 검증, 지금은 node-forge 1.0.5(`grpc`, `auth` 모듈) 채택 | 이 실험이 처음 필요로 하는 영역이라 API 모양을 검증 없이 추측하지 않기 위해 로컬로 먼저 구현·검증했고(`principles.md`의 "두 번째 필요 사례가 생길 때 추출"), 그 설계를 근거로 쓴 제안서 2건(`20260725-grpc-multi-instance-lb.md`, `20260725-jwt-auth-module.md`)이 1.0.5로 실제 반영돼 로컬 우회 코드를 걷어내고 공식 API로 전환했다 |
 | gateway는 인증/인가/라우팅만, saga 로직은 orchestrator로 완전히 분리 | 사용자 요청("API 게이트웨이에서 인증인가, 라우팅을 담당")을 문자 그대로 반영 — gateway가 비즈니스 로직을 가지면 "게이트웨이"라는 이름이 무색해짐 |
 | 분산 트랜잭션 = orchestration saga (gRPC 기반), choreography(Kafka) 아님 | choreography로 가면 gRPC가 트랜잭션 조율에서 빠지게 되어 "gRPC로 분산 트랜잭션을 관리한다"는 이번 실험의 취지와 어긋남(사용자와 논의로 확정) |
 | Try 순서를 order → inventory로 (재고 먼저가 아니라) | 재고 부족(이 실험의 핵심 실패 시나리오)이 발생했을 때 반드시 order-service의 CancelOrder gRPC 호출이 exercise되도록 — 순서를 반대로 하면 CancelOrder가 정상 흐름에서 한 번도 안 불리는 죽은 경로가 됨 |
@@ -161,7 +161,8 @@ admin 라우트 전용).
 | inventory-service는 호스트 포트를 노출하지 않음 | 2개 인스턴스로 스케일되므로 고정 호스트 포트 매핑이 애초에 불가능 — orchestrator/gateway만 내부 Docker 네트워크(`dns:///inventory-service:50053`)로 접근 |
 | `orders`/`reservations`에 `sagaId` unique 컬럼으로 멱등성 확보 | orchestrator가 네트워크 오류 후 같은 sagaId로 Try를 재시도해도(폴러가 다음 tick에 다시 호출) 주문/예약이 중복 생성되지 않음 |
 | 재고 리셋(`ResetStock`)은 saga를 거치지 않고 gateway → inventory-service 직접 호출 | 테스트/데모용 관리 작업이지 트랜잭션이 아니라서, orchestrator를 끼워 넣을 이유가 없음(다른 실험들의 test-only trigger 컨벤션과 동일한 성격) |
-| 인증은 `@nestjs/jwt`(jsonwebtoken) 기반 JWT — 처음엔 waiting-room의 HMAC 토큰 패턴을 재사용했다가 교체 | HMAC 직접 구현은 이 실험 하나만의 검증 목적으로는 충분했지만, "forge는 forge-lab만이 아니라 실서비스 고도화가 목적이고, 회원 인증의 bearer 토큰은 사실상 JWT가 표준"이라는 판단(사용자 논의)에 따라 실제로 JWT로 교체해 발급/검증/변조 거부/만료를 전부 실제 컨테이너에서 재현한 뒤 node-forge 제안서를 작성(`proposals/node-forge/20260725/20260725-jwt-auth-module.md`). 유저 스토어 없이 `userId+role`을 그대로 클레임(`sub`/`role`)에 담아 서명하는 것은 여전히 랩 전용 단순화 |
+| 인증은 `@paikpaik/node-forge/auth`(`signToken`/`verifyToken`) + `auth/nestjs`(`JwtAuthModule`/`JwtAuthGuard`/`Roles`) — waiting-room HMAC → 로컬 `@nestjs/jwt` → node-forge 공식 API 순으로 세 번 교체 | "forge는 forge-lab만이 아니라 실서비스 고도화가 목적이고, 회원 인증의 bearer 토큰은 사실상 JWT가 표준"이라는 판단(사용자 논의)에 따라 로컬 JWT로 먼저 검증한 뒤 그 설계를 근거로 쓴 제안서가 1.0.5로 반영돼 최종적으로 forge 공식 API로 전환. 유저 스토어 없이 `userId+role`을 그대로 클레임(`sub`/`role`)에 담아 서명하는 것은 여전히 랩 전용 단순화 |
+| `RolesGuard`는 node-forge 걸 그대로 사용(로컬 우회 없음) | node-forge 1.0.5에서 `Reflector` DI 실패 버그를 실제로 재현해 잠시 로컬 서브클래싱으로 우회했지만, 1.0.6에서 `@Inject(Reflector)` 명시로 수정돼 반영 즉시 우회 코드를 전부 제거하고 원래대로 되돌렸다(아래 검증 이력 참고) |
 | vitest로 saga 상태기계를 fake OrderClient/InventoryClient로 검증 (order-service/inventory-service를 실제로 안 띄우고) | waiting-room/live-ranking의 FakeRedisClient와 동일한 패턴을 gRPC 클라이언트 인터페이스에도 적용 — `OrderClient`/`InventoryClient` 인터페이스로 실 구현과 fake를 분리 |
 
 ## 검증 이력 (2026-07-25)
@@ -254,5 +255,93 @@ signOptions: { expiresIn } })` 추가.
 **잔존 작업**: 없음. waiting-room의 HMAC 입장 토큰(admission ticket)은 이번 교체 대상이
 아니다 — 그건 "반복 가능한 API 인증 자격증명"이 아니라 "1회성 입장권 + Redis TTL"로 성격이
 달라서, JWT로 바꿀 이유가 없다고 판단해 그대로 뒀다.
+
+### 후속 (2026-07-25) — node-forge 1.0.5 채택: `grpc`/`auth` 모듈로 로컬 우회 걷어냄
+
+앞서 작성한 두 제안서(gRPC 라운드로빈 헬퍼, JWT auth 모듈)가 node-forge 1.0.5로 실제
+반영됐다. `git log`/`git tag`로 확인 후 실제 `dist` 소스까지 읽어 API 형태를 파악하고, 로컬
+구현을 전부 걷어내고 공식 API로 전환했다.
+
+**실제 변경 파일**:
+- `package.json` — `@paikpaik/node-forge` `^1.0.4` → `^1.0.5`, `@nestjs/jwt` 제거(더 이상
+  불필요 — forge의 `auth` 모듈이 `jsonwebtoken`을 직접 사용)
+- `src/shared/grpc-client.util.ts` 삭제 — 4개 프로세스의 `main.ts`/`*.module.ts`에서
+  `@paikpaik/node-forge/grpc/nestjs`의 `createGrpcClientOptions`/`createGrpcServerOptions`를
+  직접 사용(forge 버전은 `protoPath`를 호출부가 직접 조합해서 넘기는 방식이라 각 파일에서
+  `join(__dirname, "..", "..", "proto", "x.proto")` 형태로 수정)
+- `src/shared/auth/*` 전체 삭제 — `signToken`/`verifyToken`(`@paikpaik/node-forge/auth`),
+  `JwtAuthModule`/`JwtAuthGuard`/`Roles`(`@paikpaik/node-forge/auth/nestjs`)로 교체. `Role`
+  타입만 msa-checkout 도메인 타입으로 `shared/constants.ts`에 유지(forge의 `RolesGuard`는
+  role을 string으로만 다뤄 특정 타입을 강제하지 않음)
+- `req.user!.userId` → `req.user!.sub`로 전체 변경(forge의 `AuthedRequest<T>`가 JWT 표준
+  클레임 필드명 `sub`를 그대로 씀)
+- `src/gateway/roles-guard.workaround.ts` — 신규, 아래 버그 우회용
+- 로컬 auth 유닛테스트(가드/토큰) 11개 삭제 — node-forge 쪽에 이미 자체 테스트가 있어 중복
+  검증 불필요. vitest 33개 → 22개
+
+**실제로 겪은 문제 1 — `RolesGuard` DI 실패(HIGH, 재현·우회·제안서 완료)**: 재빌드 후 인증이
+붙은 모든 라우트가 500. 로그는 `RolesGuard.canActivate`에서
+`Cannot read properties of undefined (reading 'getAllAndOverride')` — `this.reflector`가
+`undefined`. 실제 배포된 `node_modules/@paikpaik/node-forge/dist/auth/nestjs/index.js`를 직접
+열어서 원인 확인: `JwtAuthGuard`는 `@Inject(AUTH_OPTIONS)`를 명시했지만 `RolesGuard`는
+`Reflector` 타입 추론에만 의존하는데, tsup(esbuild) 빌드가 `emitDecoratorMetadata`를
+방출하지 않아 실제 배포 `dist`에는 그 타입 정보가 없다. `{ provide: RolesGuard, useFactory:
+..., inject: [Reflector] }`로 명시 주입을 시도했지만 **동일한 에러가 그대로 재현**돼서(원인
+불명, `@UseGuards()`의 provider 해석 경로 문제로 추정) 결국 로컬 서브클래싱(msa-checkout
+자체 tsc 빌드는 `emitDecoratorMetadata`가 정상 동작하므로 메타데이터가 살아있음)으로
+우회했다. 제안서 작성 완료(`proposals/node-forge/20260725/20260725-roles-guard-di-broken.md`).
+
+**실제로 겪은 문제 2 — gRPC 라운드로빈이 "안 되는 것처럼" 보였던 사례(버그 아님, 운영 관찰)**:
+gateway만 재빌드하는 과정에서 `docker compose up -d gateway`가 매번 inventory-service의
+스케일을 1로 초기화시켜(`--scale` 지정이 유지 안 됨 — 이것도 별도 관찰 사항), 다시 스케일한
+뒤 라운드로빈을 재검증하니 인스턴스-2 트래픽이 전혀 늘지 않았다. **orchestrator를 재시작한
+뒤 재검증하니 두 인스턴스 모두 정상적으로 트래픽을 받았다** — 즉 `createGrpcClientOptions`의
+`dns:///`+`round_robin` 자체는 정상 동작하고, 원인은 "이미 gRPC 채널을 열어둔 클라이언트가
+나중에 추가된 인스턴스를 즉시 재해석하지 못하는" grpc-js/DNS resolver의 특성이었다. 실서비스
+운영 교훈: 도메인 서비스를 롤링으로 스케일아웃할 때, 이미 떠 있는 클라이언트(orchestrator)
+쪽도 재시작하지 않으면 새 인스턴스가 트래픽을 못 받을 수 있다.
+
+**검증**: JWT 발급/정상 인증(201)/인가 실패(403)/변조 거부(401) 전부 실제 컨테이너에서
+재확인. gRPC 라운드로빈은 orchestrator 재시작 후 두 인스턴스 모두 트래픽 증가로 재확인. saga
+21건 전부 CONFIRMED. vitest 22개 전부 통과. 검증 후 3개 DB `TRUNCATE` + 재고 재시드(1000/1).
+
+**계획과의 차이**: `RolesGuard` DI 버그는 계획에 없던 발견 — 대응까지 이번 라운드 안에서 처리.
+
+**잔존 작업**: 두 제안서(`roles-guard-di-broken`, 이번 라운드에서 재발견된 스케일 재해석
+이슈는 별도 제안서 없이 관찰 기록만)의 후속 반영 확인은 다음 라운드로.
+
+### 후속 (2026-07-25) — node-forge 1.0.6 채택: `RolesGuard` DI 버그 수정 반영, 로컬 우회 제거
+
+바로 앞 라운드에서 재현·제안서 작성한 `RolesGuard` DI 버그가 node-forge 1.0.6으로 수정
+반영됐다는 알림을 받고 실제 커밋(`3638c25`)을 직접 읽어 확인했다.
+
+**node-forge 쪽 실제 수정 내용** (제안서보다 더 넓게 대응됨):
+- `src/auth/nestjs/roles.guard.ts` — 제안한 그대로 `constructor(@Inject(Reflector)
+  private readonly reflector: Reflector)`로 수정
+- `src/events/nestjs/events.explorer.ts` — 같은 원인(esbuild가 `emitDecoratorMetadata`
+  미방출)의 버그가 있던 `EventsExplorer`(discovery/scanner/reflector 3개 파라미터)도 함께
+  발견해 전부 `@Inject()` 명시로 수정 — 제안서가 지목한 범위보다 넓게 근본 원인을 훑어서
+  대응한 것
+- `scripts/smoke-test.mjs` — 제안서의 "실제로 빌드된 dist를 설치해서 스모크 테스트해야
+  드러난다"는 지적을 그대로 반영: `Reflect.getMetadata("self:paramtypes", RolesGuard)`로
+  `@Inject(Reflector)` 메타데이터가 실제 dist에 살아있는지 직접 검증하는 코드와,
+  `EventsModule`을 실제로 부팅시켜 `EventsExplorer`가 죽지 않는지 확인하는 스모크 테스트가
+  CI에 추가됨
+
+**실제 변경 파일(msa-checkout 쪽)**:
+- `package.json` — `@paikpaik/node-forge` `^1.0.5` → `^1.0.6`
+- `src/gateway/roles-guard.workaround.ts` 삭제
+- `src/gateway/gateway.module.ts`, `checkout.controller.ts`, `admin.controller.ts` —
+  `RolesGuard` import를 로컬 워크어라운드에서 `@paikpaik/node-forge/auth/nestjs`로 되돌림
+
+**검증**: 우회 코드를 완전히 제거한 상태로 재빌드 후 실제 컨테이너에서 정상 체크아웃(201),
+customer 토큰으로 admin 리소스 접근 시 403, admin 토큰으로는 정상 처리까지 재확인 — 처음
+`RolesGuard`를 만났을 때와 동일한 케이스를 동일하게 재현해서 버그가 실제로 없어졌음을
+증명했다. vitest 22개, `tsc --noEmit` 전부 클린.
+
+**계획과의 차이**: 없음.
+
+**잔존 작업**: 없음. `docs/issues.md`의 node-forge 표에 `RolesGuard` DI 버그 항목을 1.0.6
+대응 결과로 추가.
 
 관련 플랜: `.claude-plans/20260725/msa-checkout.md` (실행 이력 포함).

@@ -2,6 +2,68 @@
 
 ## 플랜 실행 이력
 
+### 후속: 2026-07-25 (node-forge 1.0.6 채택 — `RolesGuard` DI 버그 수정 반영)
+
+바로 앞 라운드에서 재현·제안한 `RolesGuard` DI 버그가 1.0.6으로 수정됐다는 알림. 실제 커밋
+(`3638c25`)을 읽어 확인 — 제안한 대로 `@Inject(Reflector)`가 추가됐고, 같은 원인의 버그가
+있던 `EventsExplorer`도 함께 발견해 수정됐으며, 스모크 테스트에 실제 배포 dist의 DI 메타데이터
+검증과 `EventsModule` 부팅 테스트까지 추가됨(제안서의 "실제 설치해서 실행해야 드러난다"는
+지적을 CI에 반영).
+
+**실제 변경 파일**:
+- `package.json` — node-forge `^1.0.5` → `^1.0.6`
+- `src/gateway/roles-guard.workaround.ts` 삭제
+- `gateway.module.ts`/`checkout.controller.ts`/`admin.controller.ts` — `RolesGuard` import를
+  forge 공식 경로로 되돌림
+- `ARCHITECTURE.md`, `docs/issues.md` 갱신(RolesGuard 버그를 1.0.6 대응 결과로 표에 추가)
+
+**검증**: 우회 코드 완전 제거 상태로 재빌드 후 실제 컨테이너에서 정상 체크아웃(201)/인가
+실패(403)/admin 정상 처리(201) 재확인 — 버그가 실제로 없어졌음을 동일 케이스로 증명. vitest
+22개, tsc 클린.
+
+**계획과의 차이**: 없음.
+
+**잔존 작업**: 없음.
+
+---
+
+### 후속: 2026-07-25 (node-forge 1.0.5 채택 — `grpc`/`auth` 모듈로 로컬 우회 걷어냄)
+
+앞서 쓴 두 제안서(gRPC 라운드로빈 헬퍼, JWT auth 모듈)가 node-forge 1.0.5로 반영됐다는
+사용자 알림 — 이 세션 전체에서 반복해온 "버전 업 알림 → 실제 소스 확인 → 로컬 우회 제거 →
+공식 API로 전환 → 실제 재검증 → 제안서/문서 업데이트" 흐름을 그대로 따랐다.
+
+**실제 변경 파일**:
+- `package.json` — node-forge `^1.0.5`, `@nestjs/jwt` 제거
+- `src/shared/grpc-client.util.ts` 삭제, `src/shared/auth/*` 전체 삭제
+- 4개 프로세스의 `main.ts`/`*.module.ts`에서 `@paikpaik/node-forge/grpc/nestjs`의
+  `createGrpcClientOptions`/`createGrpcServerOptions` 직접 사용
+- `src/gateway/{auth,checkout,admin}.controller.ts` — `@paikpaik/node-forge/auth`,
+  `auth/nestjs` 사용으로 전환, `req.user!.userId` → `req.user!.sub`
+- `src/gateway/roles-guard.workaround.ts` 신규 — 아래 버그 우회
+- 로컬 auth 유닛테스트 11개 삭제 (node-forge 자체 테스트로 커버)
+- `proposals/node-forge/20260725/20260725-roles-guard-di-broken.md` 신규
+- `ARCHITECTURE.md`, `docs/issues.md` 갱신
+
+**실제로 겪은 문제**:
+1. `RolesGuard` DI 실패(HIGH) — 실제 배포된 `dist`를 직접 열어서 원인 확인(`Reflector` 타입
+   추론에만 의존하는데 tsup/esbuild가 `emitDecoratorMetadata`를 방출 안 함). `useFactory`
+   명시 주입도 실패해서 로컬 서브클래싱으로 최종 우회. 제안서 작성.
+2. gRPC 라운드로빈이 "안 되는 것처럼" 보였던 사례 — 실제로는 버그가 아니라 이미 뜬
+   orchestrator가 나중에 추가된 inventory-service 인스턴스를 즉시 재해석 못 하는 grpc-js
+   특성. orchestrator 재시작 후 정상 분산 재확인.
+
+**검증**: JWT 발급/인증/인가/변조 거부 전부 실제 컨테이너 재확인, gRPC 라운드로빈 재확인
+(orchestrator 재시작 후 두 인스턴스 모두 트래픽 증가), saga 21건 CONFIRMED, vitest 22개 통과.
+
+**계획과의 차이**: `RolesGuard` DI 버그는 계획에 없던 발견 — 재현·우회·제안서까지 이번
+라운드 안에서 전부 처리.
+
+**잔존 작업**: `roles-guard-di-broken` 제안서 반영 확인 — 반영되면 로컬 서브클래싱
+(`roles-guard.workaround.ts`)을 지우고 forge의 `RolesGuard`로 되돌린다.
+
+---
+
 ### 후속: 2026-07-25 (HMAC 자체 구현 → JWT(`@nestjs/jwt`) 교체)
 
 사용자가 "forge의 목적은 forge-lab이 아니라 실제 forge 고도화이고, 회원 인증 bearer 토큰은

@@ -1,5 +1,5 @@
 import { IsIn, IsString, MinLength } from "class-validator";
-import { Role } from "../../shared/auth/auth-token.service";
+import { Role } from "../../shared/constants";
 
 // 이 실험은 로그인 시스템 자체가 아니라 게이트웨이 인증/인가 패턴을 검증하는 게 목적이라,
 // 실제 유저 스토어 없이 "userId+role을 주면 그 값으로 서명된 토큰을 내준다" — waiting-room의

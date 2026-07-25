@@ -1,6 +1,7 @@
+import { join } from "node:path";
 import { Module } from "@nestjs/common";
 import { ClientsModule } from "@nestjs/microservices";
-import { grpcClientOptions } from "../shared/grpc-client.util";
+import { createGrpcClientOptions } from "@paikpaik/node-forge/grpc/nestjs";
 import { SagaController } from "./saga.controller";
 import { SagaService } from "./saga.service";
 import { SagaProcessorService } from "./saga-processor.service";
@@ -15,8 +16,22 @@ const INVENTORY_SERVICE_URL = process.env.INVENTORY_SERVICE_URL ?? "localhost:50
 @Module({
   imports: [
     ClientsModule.register([
-      { name: ORDER_GRPC_PACKAGE, ...grpcClientOptions("order", "order.proto", ORDER_SERVICE_URL) },
-      { name: INVENTORY_GRPC_PACKAGE, ...grpcClientOptions("inventory", "inventory.proto", INVENTORY_SERVICE_URL) },
+      {
+        name: ORDER_GRPC_PACKAGE,
+        ...createGrpcClientOptions({
+          packageName: "order",
+          protoPath: join(__dirname, "..", "..", "proto", "order.proto"),
+          target: ORDER_SERVICE_URL,
+        }),
+      },
+      {
+        name: INVENTORY_GRPC_PACKAGE,
+        ...createGrpcClientOptions({
+          packageName: "inventory",
+          protoPath: join(__dirname, "..", "..", "proto", "inventory.proto"),
+          target: INVENTORY_SERVICE_URL,
+        }),
+      },
     ]),
   ],
   controllers: [SagaController],

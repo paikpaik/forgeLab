@@ -1,10 +1,11 @@
 import "reflect-metadata";
+import { join } from "node:path";
 import { NestFactory, HttpAdapterHost } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import type { MicroserviceOptions } from "@nestjs/microservices";
 import { ForgeExceptionFilter } from "@paikpaik/node-forge/response/nestjs";
 import { ForgeLoggerService } from "@paikpaik/node-forge/logger/nestjs";
-import { grpcServerOptions } from "../shared/grpc-client.util";
+import { createGrpcServerOptions } from "@paikpaik/node-forge/grpc/nestjs";
 import { InventoryAppModule } from "./app.module";
 
 // gRPC 서버 하나만 있으면 /health, /metrics를 못 붙이므로(node-forge는 HTTP 기반) NestJS의
@@ -13,7 +14,11 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(InventoryAppModule, { bufferLogs: true });
 
   app.connectMicroservice<MicroserviceOptions>(
-    grpcServerOptions("inventory", "inventory.proto", `0.0.0.0:${process.env.GRPC_PORT ?? 50053}`),
+    createGrpcServerOptions({
+      packageName: "inventory",
+      protoPath: join(__dirname, "..", "..", "proto", "inventory.proto"),
+      url: `0.0.0.0:${process.env.GRPC_PORT ?? 50053}`,
+    }),
   );
 
   app.useLogger(app.get(ForgeLoggerService));
