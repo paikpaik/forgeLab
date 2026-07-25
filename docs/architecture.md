@@ -19,8 +19,10 @@ forge-lab/
 │   │   └── forge-lab.json     { "panelUrl": "...", "architectureDoc": "ARCHITECTURE.md" }
 │   ├── live-ranking/          NestJS + Redis + Kafka(Redpanda) (2번째 실험 — kafka-forge producer/consumer/재시도/DLQ/멱등성)
 │   │   └── (ingest:producer + aggregator:consumer, 프로세스 2개로 분리)
-│   └── order-outbox/          NestJS + Postgres + Kafka(Redpanda) (3번째 실험 — node-forge database, kafka-forge outbox)
-│       └── (api:주문+outbox폴러 + fulfillment:다운스트림컨슈머, 프로세스 2개로 분리)
+│   ├── order-outbox/          NestJS + Postgres + Kafka(Redpanda) (3번째 실험 — node-forge database, kafka-forge outbox)
+│   │   └── (api:주문+outbox폴러 + fulfillment:다운스트림컨슈머, 프로세스 2개로 분리)
+│   └── msa-checkout/          NestJS + gRPC + Postgres (4번째 실험 — API 게이트웨이 인증/인가, gRPC, orchestration saga, 다중 인스턴스 정합성)
+│       └── (gateway + orchestrator + order-service + inventory-service×2, 프로세스 4개로 분리)
 ├── dashboard/                Fastify, services/* 오케스트레이션 전담
 │   └── public/index.html      탭(Architecture/Issue + 서비스별) + 문서 뷰어
 └── package.json               npm workspaces root
@@ -52,6 +54,8 @@ flowchart TB
         ingest(producer) + aggregator(consumer)`"]
         S3["`**order-outbox** : 3200/3201
         api(주문+outbox폴러) + fulfillment(consumer)`"]
+        S4["`**msa-checkout** : 3300/3301/3302
+        gateway + orchestrator + order-service + inventory-service×2`"]
     end
 
     NF[["`**node-forge / kafka-forge**
@@ -64,6 +68,7 @@ flowchart TB
     DUI ==>|"iframe"| S1
     DUI ==>|"iframe"| S2
     DUI ==>|"iframe"| S3
+    DUI ==>|"iframe"| S4
     U -.->|"서비스 포트 직접 접속"| S1
 
     SVC -.-> NF
@@ -75,7 +80,7 @@ flowchart TB
 
     class U userNode
     class DUI,DAPI,DREG,DDOC dashboardNode
-    class S1,S2,S3 serviceNode
+    class S1,S2,S3,S4 serviceNode
     class NF forgeNode
 ```
 

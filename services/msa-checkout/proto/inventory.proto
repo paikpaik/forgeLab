@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package inventory;
+
+// 다중 인스턴스 정합성 검증 대상 — 이 서비스는 docker-compose에서 2개 인스턴스로 뜬다.
+// TryReserve는 반드시 DB 원자적 조건부 UPDATE로 구현해야 한다 (SELECT 후 애플리케이션에서
+// 조건 검사하는 2단계 방식 금지 — TOCTOU).
+service InventoryService {
+  rpc TryReserve (TryReserveRequest) returns (TryReserveResponse);
+  rpc ConfirmReserve (ReservationRequest) returns (InventoryActionResponse);
+  rpc CancelReserve (ReservationRequest) returns (InventoryActionResponse);
+  // 테스트/데모 전용 — gateway의 admin 라우트가 직접 호출한다(saga 흐름과 무관).
+  rpc ResetStock (ResetStockRequest) returns (InventoryActionResponse);
+  rpc GetStock (GetStockRequest) returns (GetStockResponse);
+}
+
+message TryReserveRequest {
+  string sagaId = 1;
+  string productId = 2;
+  int32 quantity = 3;
+}
+
+message TryReserveResponse {
+  bool success = 1;
+  string reservationId = 2;
+  string error = 3;
+}
+
+message ReservationRequest {
+  string sagaId = 1;
+  string reservationId = 2;
+}
+
+message InventoryActionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ResetStockRequest {
+  string productId = 1;
+  int32 total = 2;
+}
+
+message GetStockRequest {
+  string productId = 1;
+}
+
+message GetStockResponse {
+  bool found = 1;
+  string productId = 2;
+  int32 total = 3;
+  int32 reserved = 4;
+  int32 available = 5;
+}

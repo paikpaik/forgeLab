@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>msa-checkout</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, sans-serif;
+    margin: 0;
+    padding: 1.5rem;
+    background: #ffffff;
+    color: #1f2430;
+  }
+  h1 { font-size: 1.15rem; margin: 0 0 1rem; }
+  h2 { font-size: 0.95rem; margin: 0 0 0.75rem; color: #374151; font-weight: 700; }
+  p { line-height: 1.6; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+  .grid > .full { grid-column: 1 / -1; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+
+  .card { border: 1px solid #e2e5ea; border-radius: 10px; padding: 1rem 1.1rem; background: #fafbfc; }
+
+  button {
+    padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid #d1d5db;
+    background: #ffffff; color: #1f2430; cursor: pointer; font-size: 0.85rem;
+  }
+  button:hover { background: #f3f4f6; }
+  button.primary { background: #2f6feb; border-color: #2f6feb; color: #fff; }
+  button.primary:hover { background: #2660d1; }
+  button.danger { color: #b42318; border-color: #f3a6a0; }
+  button.danger:hover { background: #fef1f0; }
+
+  .form-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+  input[type="text"], input[type="number"], select {
+    padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid #d1d5db;
+  }
+  input[type="text"] { width: 9rem; }
+  input[type="number"] { width: 5rem; }
+  label { font-size: 0.8rem; color: #6b7280; display: flex; align-items: center; gap: 0.3rem; }
+  .hint { font-size: 0.78rem; color: #9ca3af; margin-top: 0.4rem; }
+
+  .token-badge { font-family: ui-monospace, monospace; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 999px; }
+  .token-badge.ok { background: #e6f4ea; color: #1a7f4b; }
+  .token-badge.none { background: #f3f4f6; color: #9ca3af; }
+
+  .sagas { display: flex; flex-direction: column; gap: 0.4rem; }
+  .saga-row {
+    display: grid; grid-template-columns: 8rem 9rem 1fr 6rem; align-items: center;
+    gap: 0.5rem; padding: 0.5rem 0.7rem; border-radius: 6px; border: 1px solid #e2e5ea;
+    font-size: 0.82rem;
+  }
+  .saga-row .id { font-family: ui-monospace, monospace; color: #6b7280; font-size: 0.75rem; }
+  .saga-row .detail { font-size: 0.75rem; color: #6b7280; }
+
+  .status { padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 700; text-align: center; }
+  .status.STARTED, .status.ORDER_TRIED, .status.INVENTORY_TRIED { background: #fff4e0; color: #9a6400; }
+  .status.CONFIRMED { background: #e6f4ea; color: #1a7f4b; }
+  .status.COMPENSATING { background: #ffe8e0; color: #b3441c; }
+  .status.CANCELLED { background: #f3f4f6; color: #6b7280; }
+  .status.FAILED { background: #fde3e1; color: #b42318; }
+
+  .stock-row { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px dashed #e2e5ea; font-size: 0.85rem; }
+  .stock-row:last-child { border-bottom: none; }
+  .stock-num { font-family: ui-monospace, monospace; }
+  .stock-num.zero { color: #b42318; font-weight: 700; }
+
+  .log { font-family: ui-monospace, monospace; font-size: 0.78rem; color: #4b5563; max-height: 12rem; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 0.15rem; }
+  .log .empty { color: #9ca3af; }
+  .log .err { color: #b42318; }
+
+  .guide ol { padding-left: 1.2rem; margin: 0; }
+  .guide li { margin-bottom: 0.5rem; }
+  .guide code { background: #eef0f3; border-radius: 4px; padding: 0.05rem 0.35rem; font-size: 0.85em; }
+</style>
+</head>
+<body>
+  <h1>msa-checkout · API 게이트웨이 + gRPC + Orchestration Saga 패널</h1>
+
+  <div class="grid">
+    <div class="card">
+      <h2>로그인 (게이트웨이 인증)</h2>
+      <div class="form-row">
+        <label>userId <input type="text" id="user-id-input" value="alice"></label>
+        <button id="login-customer-btn">고객으로 로그인</button>
+        <span class="token-badge none" id="customer-token-badge">토큰 없음</span>
+      </div>
+      <div class="form-row">
+        <label>userId <input type="text" id="admin-id-input" value="ops"></label>
+        <button id="login-admin-btn">관리자로 로그인</button>
+        <span class="token-badge none" id="admin-token-badge">토큰 없음</span>
+      </div>
+      <p class="hint" style="margin-bottom:0">gateway가 HMAC 서명 토큰을 발급합니다(15분 TTL). 체크아웃은 customer, 재고 강제 리셋은 admin 권한이 필요합니다 — 아래 "인가 실패 재현"으로 권한이 실제로 막히는 것도 확인할 수 있습니다.</p>
+    </div>
+
+    <div class="card">
+      <h2>재고 현황</h2>
+      <div id="stock-list"></div>
+      <div class="form-row" style="margin-top:0.6rem">
+        <button class="danger" id="reset-scarce-btn">widget-scarce 재고를 1로 리셋 (admin)</button>
+        <button id="unauthorized-btn">인가 실패 재현 (customer로 리셋 시도)</button>
+      </div>
+    </div>
+
+    <div class="card full">
+      <h2>체크아웃</h2>
+      <div class="form-row">
+        <label>상품 <select id="product-select">
+          <option value="widget-plenty">widget-plenty (재고 넉넉)</option>
+          <option value="widget-scarce">widget-scarce (재고 1개 — 경쟁 테스트용)</option>
+        </select></label>
+        <label>수량 <input type="number" id="quantity-input" value="1" min="1" max="1000"></label>
+        <button class="primary" id="checkout-btn">체크아웃</button>
+        <button class="danger" id="race-btn">widget-scarce 동시 체크아웃 2건 발사 (다중 인스턴스 경쟁 테스트)</button>
+      </div>
+      <p class="hint" style="margin-bottom:0">주문(order-service)과 재고 예약(inventory-service, 2개 인스턴스)을 gRPC로 순차 호출하는 orchestration saga입니다. "동시 발사" 버튼은 재고 1개인 상품에 요청 2건을 거의 동시에 보내서, 어느 inventory-service 인스턴스가 받든 정확히 1건만 성공하는지 확인합니다.</p>
+    </div>
+
+    <div class="card full">
+      <h2>saga 목록</h2>
+      <div class="sagas" id="saga-list"></div>
+    </div>
+
+    <div class="card full">
+      <h2>이벤트 로그</h2>
+      <div class="log" id="event-log"><div class="empty">아직 이벤트가 없습니다</div></div>
+    </div>
+
+    <div class="card full guide">
+      <h2>테스트 방법</h2>
+      <ol>
+        <li><strong>해피 패스</strong> — 로그인 후 widget-plenty로 체크아웃하면 <span class="status ORDER_TRIED">ORDER_TRIED</span> → <span class="status INVENTORY_TRIED">INVENTORY_TRIED</span> → <span class="status CONFIRMED">CONFIRMED</span> 순서로 몇 초 안에 전이됩니다(orchestrator가 2초 간격 폴링으로 saga를 진행시킵니다).</li>
+        <li><strong>보상 트랜잭션</strong> — widget-scarce 재고를 0으로 만든 뒤(먼저 체크아웃 1건으로 소진시키거나 "리셋"으로 0을 넣고) 다시 체크아웃하면, order Try는 성공하지만 inventory Try가 실패해서 <span class="status COMPENSATING">COMPENSATING</span> → <span class="status CANCELLED">CANCELLED</span>로 갑니다 — 이때 order-service에 실제로 CancelOrder gRPC 호출이 나갑니다.</li>
+        <li><strong>다중 인스턴스 정합성</strong> — "widget-scarce 재고를 1로 리셋" 후 "동시 체크아웃 2건 발사"를 누르면, inventory-service 2개 인스턴스 중 어디로 요청이 가든 정확히 1건만 CONFIRMED로 가고 나머지 1건은 CANCELLED로 갑니다(재고가 마이너스로 내려가지 않음).</li>
+        <li><strong>인가(authorization)</strong> — "인가 실패 재현"을 누르면 customer 토큰으로 admin 전용 리셋을 시도해서 403이 로그에 찍히는 걸 확인할 수 있습니다.</li>
+        <li><strong>각 프로세스의 /health, /metrics</strong> — gateway <a href="/health" target="_blank" rel="noopener">:3300/health</a>, orchestrator <code>:3301/health</code>, order-service <code>:3302/health</code>에서 확인 가능합니다(inventory-service는 호스트 포트를 노출하지 않습니다 — 2인스턴스라 고정 포트 매핑이 불가능해서 내부 네트워크에서만 접근).</li>
+      </ol>
+    </div>
+  </div>
+
+  <script>
+    let customerToken = null;
+    let adminToken = null;
+    const knownSagaIds = new Set(JSON.parse(localStorage.getItem("msa-checkout-saga-ids") || "[]"));
+
+    function persistSagaIds() {
+      localStorage.setItem("msa-checkout-saga-ids", JSON.stringify([...knownSagaIds]));
+    }
+
+    function logEvent(text, isError) {
+      const log = document.getElementById("event-log");
+      if (log.querySelector(".empty")) log.innerHTML = "";
+      const line = document.createElement("div");
+      if (isError) line.className = "err";
+      const time = new Date().toLocaleTimeString("ko-KR", { hour12: false });
+      line.textContent = "[" + time + "] " + text;
+      log.prepend(line);
+      while (log.children.length > 80) log.removeChild(log.lastChild);
+    }
+
+    async function issueToken(userId, role) {
+      const res = await fetch("/auth/token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId, role }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(JSON.stringify(body));
+      return body.data.token;
+    }
+
+    async function authedFetch(url, token, options) {
+      options = options || {};
+      options.headers = Object.assign({}, options.headers, { authorization: "Bearer " + token });
+      return fetch(url, options);
+    }
+
+    document.getElementById("login-customer-btn").addEventListener("click", async () => {
+      const userId = document.getElementById("user-id-input").value.trim() || "alice";
+      customerToken = await issueToken(userId, "customer");
+      const badge = document.getElementById("customer-token-badge");
+      badge.textContent = userId + " (customer)";
+      badge.className = "token-badge ok";
+      logEvent("customer 토큰 발급 — userId=" + userId);
+    });
+
+    document.getElementById("login-admin-btn").addEventListener("click", async () => {
+      const userId = document.getElementById("admin-id-input").value.trim() || "ops";
+      adminToken = await issueToken(userId, "admin");
+      const badge = document.getElementById("admin-token-badge");
+      badge.textContent = userId + " (admin)";
+      badge.className = "token-badge ok";
+      logEvent("admin 토큰 발급 — userId=" + userId);
+    });
+
+    async function startCheckout(productId, quantity) {
+      if (!customerToken) { logEvent("먼저 고객으로 로그인하세요", true); return null; }
+      const res = await authedFetch("/checkout", customerToken, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ productId, quantity }),
+      });
+      const body = await res.json();
+      if (!res.ok) { logEvent("체크아웃 실패: " + JSON.stringify(body), true); return null; }
+      knownSagaIds.add(body.data.sagaId);
+      persistSagaIds();
+      logEvent("체크아웃 시작 — " + productId + " x" + quantity + " (saga " + body.data.sagaId.slice(0, 8) + "…)");
+      return body.data.sagaId;
+    }
+
+    document.getElementById("checkout-btn").addEventListener("click", async () => {
+      const productId = document.getElementById("product-select").value;
+      const quantity = Number(document.getElementById("quantity-input").value) || 1;
+      await startCheckout(productId, quantity);
+      await refreshSagas();
+    });
+
+    document.getElementById("race-btn").addEventListener("click", async () => {
+      logEvent("widget-scarce 동시 체크아웃 2건 발사 — 어느 inventory-service 인스턴스가 받든 정확히 1건만 성공해야 합니다");
+      await Promise.all([startCheckout("widget-scarce", 1), startCheckout("widget-scarce", 1)]);
+      await refreshSagas();
+    });
+
+    async function refreshSagas() {
+      if (!customerToken) return;
+      const list = document.getElementById("saga-list");
+      const ids = [...knownSagaIds].reverse().slice(0, 30);
+      if (ids.length === 0) { list.innerHTML = '<div class="hint">아직 saga가 없습니다</div>'; return; }
+
+      const views = await Promise.all(
+        ids.map((id) => authedFetch("/checkout/" + id, customerToken).then((r) => r.json()).then((b) => b.data)),
+      );
+
+      list.innerHTML = views
+        .map((v) => {
+          if (!v || !v.found) return "";
+          const detail = [
+            v.orderId ? "order " + v.orderId.slice(0, 8) + "…" : "",
+            v.reservationId ? "reservation " + v.reservationId.slice(0, 8) + "…" : "",
+            v.lastError || "",
+          ].filter(Boolean).join(" · ");
+          return (
+            '<div class="saga-row"><div class="id">' + v.sagaId.slice(0, 8) + "…</div><div>" +
+            v.productId + " x" + v.quantity + '</div><div class="detail">' + detail +
+            '</div><div class="status ' + v.status + '">' + v.status + "</div></div>"
+          );
+        })
+        .join("");
+    }
+
+    async function refreshStock() {
+      const token = customerToken || adminToken;
+      if (!token) { document.getElementById("stock-list").innerHTML = '<div class="hint">로그인 후 표시됩니다</div>'; return; }
+      const products = ["widget-plenty", "widget-scarce"];
+      const results = await Promise.all(
+        products.map((p) => authedFetch("/admin/inventory/" + p, token).then((r) => r.json()).then((b) => b.data)),
+      );
+      const list = document.getElementById("stock-list");
+      list.innerHTML = results
+        .map((s, i) => {
+          if (!s || !s.found) return "";
+          const zero = s.available <= 0 ? "zero" : "";
+          return (
+            '<div class="stock-row"><span>' + products[i] + '</span><span class="stock-num ' + zero + '">available ' +
+            s.available + " / total " + s.total + " (reserved " + s.reserved + ")</span></div>"
+          );
+        })
+        .join("");
+    }
+
+    document.getElementById("reset-scarce-btn").addEventListener("click", async () => {
+      if (!adminToken) { logEvent("먼저 관리자로 로그인하세요", true); return; }
+      const res = await authedFetch("/admin/inventory/widget-scarce/reset", adminToken, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ total: 1 }),
+      });
+      const body = await res.json();
+      logEvent(res.ok ? "widget-scarce 재고를 1로 리셋함" : "리셋 실패: " + JSON.stringify(body), !res.ok);
+      await refreshStock();
+    });
+
+    document.getElementById("unauthorized-btn").addEventListener("click", async () => {
+      if (!customerToken) { logEvent("먼저 고객으로 로그인하세요", true); return; }
+      const res = await authedFetch("/admin/inventory/widget-scarce/reset", customerToken, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ total: 1 }),
+      });
+      const body = await res.json();
+      logEvent(
+        "인가 재현 — customer 토큰으로 admin 전용 리셋 시도 → HTTP " + res.status + " " + JSON.stringify(body),
+        !res.ok,
+      );
+    });
+
+    refreshStock();
+    refreshSagas();
+    setInterval(refreshStock, 2000);
+    setInterval(refreshSagas, 1500);
+  </script>
+</body>
+</html>
