@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package order;
+
+service OrderService {
+  rpc TryCreateOrder (TryCreateOrderRequest) returns (TryCreateOrderResponse);
+  rpc ConfirmOrder (OrderRequest) returns (OrderActionResponse);
+  rpc CancelOrder (OrderRequest) returns (OrderActionResponse);
+}
+
+message TryCreateOrderRequest {
+  string sagaId = 1;
+  string userId = 2;
+  string productId = 3;
+  int32 quantity = 4;
+}
+
+message TryCreateOrderResponse {
+  bool success = 1;
+  string orderId = 2;
+  string error = 3;
+}
+
+message OrderRequest {
+  string sagaId = 1;
+  string orderId = 2;
+}
+
+message OrderActionResponse {
+  bool success = 1;
+  string error = 2;
+}

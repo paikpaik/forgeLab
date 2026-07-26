@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package checkout;
+
+// gateway가 orchestrator를 호출하는 계약. StartCheckout은 saga 인스턴스를 영속화한 직후
+// 바로 응답한다(saga 실행 자체는 orchestrator 내부 폴러가 비동기로 진행) — 다른 세 실험과
+// 동일한 "빠르게 접수, 상태는 폴링으로 확인" 컨벤션.
+service CheckoutSagaService {
+  rpc StartCheckout (StartCheckoutRequest) returns (StartCheckoutResponse);
+  rpc GetSagaStatus (GetSagaStatusRequest) returns (SagaStatusResponse);
+}
+
+message StartCheckoutRequest {
+  string userId = 1;
+  string productId = 2;
+  int32 quantity = 3;
+}
+
+message StartCheckoutResponse {
+  string sagaId = 1;
+}
+
+message GetSagaStatusRequest {
+  string sagaId = 1;
+}
+
+message SagaStatusResponse {
+  bool found = 1;
+  string sagaId = 2;
+  string status = 3;
+  string productId = 4;
+  int32 quantity = 5;
+  string orderId = 6;
+  string reservationId = 7;
+  string lastError = 8;
+  string createdAt = 9;
+  string updatedAt = 10;
+}
