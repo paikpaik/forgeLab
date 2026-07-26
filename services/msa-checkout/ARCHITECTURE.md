@@ -158,12 +158,18 @@ admin 라우트 전용).
 | SagaProcessorService가 saga 하나씩 개별 try/catch로 처리 | kafka-forge `OutboxPublisher`가 겪었던 "배치 중 하나 실패 시 전체 중단·중복 재발행" 버그(order-outbox 라운드에서 실제로 재현하고 제안서로 고친 바로 그 버그)를 이 실험에서 반복하지 않기 위해 처음부터 격리해서 구현 |
 | inventory Try는 원자적 조건부 UPDATE(`WHERE total - reserved >= qty`) | SELECT 후 애플리케이션에서 조건 검사하는 2단계 방식은 TOCTOU라 다중 인스턴스 상황에서 재고가 마이너스로 내려갈 수 있음 |
 | gRPC 클라이언트에 `dns:///` 스킴 + `round_robin` LB 명시 | grpc-js 기본 정책(`pick_first`)은 최초 연결한 인스턴스에 고정돼서, Docker가 서비스명 하나로 여러 인스턴스를 돌려줘도(임베디드 DNS round-robin) 실제로는 한쪽만 계속 쓰게 됨 — 다중 인스턴스 검증의 전제 조건이라 명시적으로 설정 |
-| inventory-service는 호스트 포트를 노출하지 않음 | 2개 인스턴스로 스케일되므로 고정 호스트 포트 매핑이 애초에 불가능 — orchestrator/gateway만 내부 Docker 네트워크(`dns:///inventory-service:50053`)로 접근 |
+| orchestrator/order-service/inventory-service 전부 호스트 포트를 노출하지 않음 | inventory-service는 2인스턴스라 애초에 고정 포트 매핑이 불가능해서 그랬지만, 이후 API 게이트웨이 5대 책임(라우팅·인증인가·변환·정책·관측) 감사에서 orchestrator(3301)/order-service(3302)의 HTTP 포트(health/metrics용)가 여전히 host에 노출돼 "내부 IP/port 은닉"이 불완전하다는 걸 발견 → 두 포트도 제거해서 gateway(3300)만 유일한 host 진입점으로 만듦. 개별 서비스 health 확인은 `docker exec`으로 대체 |
 | `orders`/`reservations`에 `sagaId` unique 컬럼으로 멱등성 확보 | orchestrator가 네트워크 오류 후 같은 sagaId로 Try를 재시도해도(폴러가 다음 tick에 다시 호출) 주문/예약이 중복 생성되지 않음 |
 | 재고 리셋(`ResetStock`)은 saga를 거치지 않고 gateway → inventory-service 직접 호출 | 테스트/데모용 관리 작업이지 트랜잭션이 아니라서, orchestrator를 끼워 넣을 이유가 없음(다른 실험들의 test-only trigger 컨벤션과 동일한 성격) |
 | 인증은 `@paikpaik/node-forge/auth`(`signToken`/`verifyToken`) + `auth/nestjs`(`JwtAuthModule`/`JwtAuthGuard`/`Roles`) — waiting-room HMAC → 로컬 `@nestjs/jwt` → node-forge 공식 API 순으로 세 번 교체 | "forge는 forge-lab만이 아니라 실서비스 고도화가 목적이고, 회원 인증의 bearer 토큰은 사실상 JWT가 표준"이라는 판단(사용자 논의)에 따라 로컬 JWT로 먼저 검증한 뒤 그 설계를 근거로 쓴 제안서가 1.0.5로 반영돼 최종적으로 forge 공식 API로 전환. 유저 스토어 없이 `userId+role`을 그대로 클레임(`sub`/`role`)에 담아 서명하는 것은 여전히 랩 전용 단순화 |
 | `RolesGuard`는 node-forge 걸 그대로 사용(로컬 우회 없음) | node-forge 1.0.5에서 `Reflector` DI 실패 버그를 실제로 재현해 잠시 로컬 서브클래싱으로 우회했지만, 1.0.6에서 `@Inject(Reflector)` 명시로 수정돼 반영 즉시 우회 코드를 전부 제거하고 원래대로 되돌렸다(아래 검증 이력 참고) |
 | vitest로 saga 상태기계를 fake OrderClient/InventoryClient로 검증 (order-service/inventory-service를 실제로 안 띄우고) | waiting-room/live-ranking의 FakeRedisClient와 동일한 패턴을 gRPC 클라이언트 인터페이스에도 적용 — `OrderClient`/`InventoryClient` 인터페이스로 실 구현과 fake를 분리 |
+| trace ID/access log는 node-forge 1.0.7의 `core`(`runWithRequestContext`/`getRequestContext`), `logger/nestjs`(`TraceAccessLogMiddleware`), `grpc/nestjs`(`buildOutgoingTraceMetadata`/`GrpcTraceAccessLogInterceptor`) 공식 API 사용(로컬 우회 없음) | 처음엔 로컬로 구현해 검증한 뒤 제안서(`20260725-nestjs-trace-propagation.md`)를 썼고, 1.0.7로 반영돼 로컬 코드(`src/shared/trace/*`, `gateway/middleware/trace-access-log.middleware.ts`)를 전부 걷어내고 공식 API로 전환. 실제 구현이 예상보다 넓게 대응됨(크로스 엔트리 DI 스모크 테스트까지 CI에 추가됨 — 아래 검증 이력 참고) |
+| saga 폴러(`SagaProcessorService`)가 하위 서비스를 호출할 때는 trace가 원래 HTTP 요청과 이어지지 않고 매 tick마다 새로 시작됨(알려진 한계, 의도적으로 안 고침) | `@Interval` 폴러는 HTTP 요청과 무관한 별도의 비동기 트리거라 `AsyncLocalStorage` 컨텍스트가 없다 — 실제로 재현해서 확인(아래 검증 이력 참고). `sagaId`를 traceId로 재사용해서 이어붙이는 안을 검토했으나 기각 — W3C trace-id는 "하나의 유한한 인과적 호출 체인"을 나타내도록 설계된 것이라 여러 tick에 걸친 장기 프로세스에 재사용하면 표준 트레이싱 도구의 가정과 충돌한다. saga 단위 추적이 필요하면 `sagaId`를 별도 correlation-id 로그 필드로 추가하는 게 맞는 방향(미구현, 필요시 별도 진행) |
+| gRPC status code → HTTP status 매핑 필터(`GrpcStatusExceptionFilter`) | `@nestjs/microservices`의 gRPC 클라이언트가 실패를 grpc-js `ServiceError` 그대로 던지는데, 이걸 잡는 필터가 없어서 orchestrator가 다운되든(`UNAVAILABLE`) 뭐든 전부 500으로 뭉뚱그려졌다(RolesGuard 버그 재현 때도 그랬음). grpc-gateway가 쓰는 표준 매핑(`UNAVAILABLE`→503, `NOT_FOUND`→404 등)을 적용하는 catch-all(`@Catch()`) 필터를 추가하되, `ForgeExceptionFilter` *다음*에 등록해서 `ForgeBizError`는 여전히 그쪽으로 먼저 가도록 순서를 맞춤 |
+| rate limiting은 `@nestjs/throttler`(로컬 전용, node-forge 제안 안 함) | 사용자와 논의로 확정 — NestJS 공식 패키지가 이미 잘 만들어져 있어서 JWT 때와 달리 forge가 감쌀 필요가 크지 않다고 판단. `APP_GUARD`로 전역 등록, 기본 IP당 60초 20회(env로 조정 가능) |
+| CORS는 명시적으로 설정(기본은 요청 Origin 반사, env로 좁힐 수 있음) | panel.html이 같은 오리진이라 기능상 꼭 필요친 않지만, "정책 계층이 존재하지 않는다"는 감사 결과를 남겨두지 않기 위해 명시적으로 설정 |
+| IP 차단은 데모용 deny-list 미들웨어(`IpBlockMiddleware`, env `BLOCKED_IPS`) | 실서비스라면 WAF/L4에서 처리할 일이지만, 이 실험 안에서 "정책" 계층이 실제로 동작한다는 걸 보여주는 최소 구현. IP 차단 미들웨어를 access log 미들웨어보다 먼저 실행해서, 차단된 요청은 로그도 안 남기고 즉시 거부 |
 
 ## 검증 이력 (2026-07-25)
 
@@ -344,4 +350,188 @@ customer 토큰으로 admin 리소스 접근 시 403, admin 토큰으로는 정�
 **잔존 작업**: 없음. `docs/issues.md`의 node-forge 표에 `RolesGuard` DI 버그 항목을 1.0.6
 대응 결과로 추가.
 
-관련 플랜: `.claude-plans/20260725/msa-checkout.md` (실행 이력 포함).
+### 후속 (2026-07-25) — API 게이트웨이 5대 책임 감사 + 1단계(포트 은닉) 완료
+
+gateway를 실제 API 게이트웨이의 5대 책임(라우팅, 인증/인가, 변환, 정책, 관측) 기준으로
+감사한 결과, 인증/인가만 완전 구현이고 나머지 4개는 부분적이거나 전혀 없었다. 4단계
+계획(`.claude-plans/20260725/msa-checkout-gateway-hardening.md`)을 세우고 순서대로(포트 은닉
+→ 관측 → 변환 → 정책) 채우기 시작.
+
+**1단계 — 포트 은닉 완성**: orchestrator/order-service의 `docker-compose.yml` `ports:` 섹션
+제거. 재기동 후 `curl --max-time 3 http://localhost:3301/health`(orchestrator)와
+`:3302`(order-service) 둘 다 connection refused(`exit=7`)로 실제 차단 확인, `docker exec`으로
+컨테이너 내부에서는 여전히 `/health` 조회 가능함을 대조 확인, gateway 경유 체크아웃 흐름은
+정상(201) 유지되는 것도 재확인. 이제 host에 노출된 포트는 gateway(3300) 하나뿐 — inventory-service
+(원래도 미노출), orchestrator, order-service 전부 내부 Docker 네트워크로만 접근 가능.
+
+**검증**: 위 3가지(외부 차단/내부 접근성/gateway 정상)를 전부 실제 컨테이너로 재확인. 테스트로
+생성된 saga/order/reservation `TRUNCATE`로 정리.
+
+### 후속 (2026-07-25) — 2단계: trace ID(W3C traceparent) + access log
+
+**발견**: node-forge core에 `parseTraceparent`/`buildTraceparent`(W3C 표준)와 `RequestContext`
+타입이 이미 있었고, fastify 로거 플러그인은 이미 이걸로 요청별 trace-aware 로거를 자동
+연결해주고 있었다 — **NestJS 쪽에만 이 통합이 빠져 있었다**. traceparent 파싱/생성은 새로
+안 만들고 그대로 재사용, NestJS(Express) 미들웨어 + gRPC 인터셉터로 AsyncLocalStorage 전파만
+새로 구현.
+
+**실제 변경 파일**:
+- `src/shared/trace/trace-context.ts` — `AsyncLocalStorage<RequestContext>` 래퍼
+- `src/shared/trace/grpc-trace.util.ts` — `buildOutgoingMetadata()`(나가는 gRPC 호출에
+  traceparent 첨부), `getIncomingRequestContext()`(들어온 metadata에서 복원, 없으면 새 시작)
+- `src/gateway/middleware/trace-access-log.middleware.ts` — HTTP 진입점, `ForgeLoggerService.
+  withContext()`로 traceId 바인딩된 access log
+- `src/shared/trace/grpc-trace-access-log.interceptor.ts` — gRPC 서버 공통 인터셉터(orchestrator/
+  order-service/inventory-service 전부 동일하게 사용)
+- 4개 gRPC 클라이언트 wrapper(`order-grpc-client.ts` 등) — 호출마다 `buildOutgoingMetadata()`
+  첨부
+
+**실제 컨테이너 검증**: `POST /checkout` 호출 후 응답 헤더의 `traceparent`에서 traceId를 뽑아
+`docker compose logs`로 전 프로세스를 grep —
+- gateway access log와 orchestrator의 `SagaController.startCheckout` access log가 **정확히
+  같은 traceId**를 가짐(gateway→orchestrator 동기 hop은 완벽히 전파)
+- 그 이후 `SagaProcessorService`(`@Interval` 폴러)가 order-service/inventory-service를 호출한
+  access log 4건(`tryCreateOrder`/`confirmOrder`/`tryReserve`/`confirmReserve`)은 **전부 서로
+  다른 traceId**를 가짐 — 원래 예상한 대로, 폴러 tick은 HTTP 요청과 무관한 별도의 비동기
+  트리거라 `AsyncLocalStorage` 컨텍스트가 없어서 매번 새 trace가 시작됨. 위 설계 결정 표에
+  "알려진 한계"로 기록
+- 각 access log에 `grpcMethod`/`status`/`durationMs`/`traceId`/`requestId` 필드가 정확히
+  찍히는 것 확인, saga는 정상적으로 `CONFIRMED`까지 진행
+- vitest 22개, `tsc --noEmit` 클린
+
+**후속 개선 후보(이번 라운드에서 안 함)**: `SagaProcessorService.tick()`이 각 saga를 처리할 때
+`sagaId`를 traceId로 삼아 `runWithRequestContext`로 감싸면, 여러 tick에 걸친 saga 전체 진행을
+하나의 traceId로 묶을 수 있다 — "장애 시 traceId 하나로 전체 경로 추적"이라는 원래 목표에 더
+가까워짐. 사용자 확인 후 진행 여부 결정.
+
+**node-forge 제안 후보**: 이번에 로컬로 구현한 패턴(AsyncLocalStorage 전파 + W3C traceparent
++ gRPC metadata 왕복 + access log 인터셉터)은 gRPC를 쓰는 모든 서비스가 필요로 할 뻔한
+기능이고, node-forge core의 기존 traceparent 유틸/fastify 통합과도 자연스럽게 이어진다 —
+"NestJS 쪽에 이 통합이 빠져 있다"는 이번 발견 자체가 제안서감이다. 3단계/4단계까지 마친 뒤
+한 번에 정리해서 제안할지, 지금 바로 쓸지는 사용자 확인 필요.
+
+**계획과의 차이**: 없음.
+
+이후 (1) sagaId를 traceId로 재사용하는 안은 W3C trace-id 의미론과 충돌해서 기각(위 설계
+결정 표 참고), (2) trace 전파 패턴은 `proposals/node-forge/20260725/
+20260725-nestjs-trace-propagation.md`로 제안서 작성 완료.
+
+### 후속 (2026-07-25) — 3단계: gRPC status → HTTP 매핑
+
+**실제 변경 파일**:
+- `src/gateway/filters/grpc-status.filter.ts` 신규 — `GrpcStatusExceptionFilter`
+  (`@Catch()`, `BaseExceptionFilter` 상속). grpc-js status code 16종을 grpc-gateway 표준
+  매핑대로 HTTP status로 변환, `fail()`로 다른 실험들과 동일한 응답 포맷 유지. gRPC 에러가
+  아니면 `super.catch()`로 위임(회귀 없음)
+- `src/gateway/main.ts` — `ForgeExceptionFilter` 다음에 등록(순서 중요 — catch-all이 먼저면
+  `ForgeBizError`까지 가로챔)
+
+**실제 컨테이너 검증**: `docker compose stop orchestrator`로 실제로 내린 뒤 `/checkout` 호출 →
+이전엔(RolesGuard 버그 때도 확인했듯) `{"statusCode":500,"message":"Internal server error"}`로
+뭉뚱그려지던 게, 이제 `HTTP 503`, 바디는 `{"success":false,"error":{"code":"E9500","message":
+"...ECONNREFUSED..."}}`로 정확히 매핑됨을 확인. `docker compose start orchestrator` 재기동
+후 정상 201 복구도 확인. vitest 22개, tsc 클린.
+
+**계획과의 차이**: 없음.
+
+### 후속 (2026-07-26) — 4단계: 정책(rate limit/CORS/IP 차단) + 게이트웨이 5대 책임 감사 마무리
+
+**실제 변경 파일**:
+- `package.json` — `@nestjs/throttler` 추가
+- `src/gateway/app.module.ts` — `ThrottlerModule.forRoot()` + `APP_GUARD`로 `ThrottlerGuard`
+  전역 등록(기본 IP당 60초 20회, env로 조정), `IpBlockMiddleware`를 access log 미들웨어보다
+  먼저 실행되도록 등록
+- `src/gateway/middleware/ip-block.middleware.ts` 신규 — `BLOCKED_IPS` env(콤마 구분) 기반
+  deny-list
+- `src/gateway/main.ts` — `app.enableCors({ origin: ..., credentials: true })` 추가
+
+**실제 컨테이너 검증**:
+- CORS: `Origin: http://example.com`으로 요청 → 응답에 `Access-Control-Allow-Origin:
+  http://example.com`, `Access-Control-Allow-Credentials: true` 확인
+- IP 차단: `docker compose run`으로 `BLOCKED_IPS`에 실제 클라이언트 IP(`::ffff:185.199.111.154`,
+  이 환경의 outbound IP)를 넣은 임시 컨테이너 띄워 요청 → `403 Forbidden` 확인
+- rate limit: 별도 임시 컨테이너(`RATE_LIMIT_LIMIT=3`, `RATE_LIMIT_TTL_MS=5000`)로 5초 안에
+  5번 연속 요청 → 정확히 3번째까지 `201`, 4·5번째는 `429` 확인. 정식 gateway(기본 한도
+  20회/60초)는 일반 사용에 지장 없음도 확인
+- vitest 22개, tsc 클린
+
+**계획과의 차이**: 없음.
+
+### 게이트웨이 5대 책임 — 최종 감사 결과
+
+이 실험 초반에 냉정하게 감사했을 때는 인증/인가 1개만 완전 구현이었다. 4단계를 전부
+마친 지금은:
+
+| # | 항목 | 상태 |
+|---|---|---|
+| 1 | 라우팅(포트 은닉) | **완전 구현** — gateway(3300)만 유일한 host 진입점, 나머지는 전부 내부 네트워크 전용 |
+| 2 | 인증/인가 | **완전 구현** — 하위 서비스에 인증 코드 0건 |
+| 3 | 변환 | **완전 구현** — 응답 포맷 통일 + gRPC status → HTTP status 매핑 |
+| 4 | 정책 | **완전 구현** — rate limiting, CORS, IP 차단 |
+| 5 | 관측 | **완전 구현**(알려진 한계 1건 명시) — trace 전파 + access log, 단 백그라운드 폴러 구간은 별도 trace로 시작(의도적) |
+
+5개 중 5개 모두 실제 컨테이너 재현으로 검증 완료.
+
+### 후속 (2026-07-26) — node-forge 1.0.7 채택: trace 전파를 로컬 구현에서 공식 API로 전환
+
+`20260725-nestjs-trace-propagation.md` 제안서가 1.0.7(`core`에 `request-context.ts`,
+`logger/nestjs`에 `TraceAccessLogMiddleware`, `grpc/nestjs`에
+`buildOutgoingTraceMetadata`/`GrpcTraceAccessLogInterceptor`)로 반영됐다는 알림을 받고 실제
+커밋(`b0c0f47`)을 읽어 확인 후 채택했다.
+
+**node-forge 쪽 실제 구현 특이사항**: `GrpcTraceAccessLogInterceptor`가 `logger/nestjs`의
+`ForgeLoggerService`를 크로스 엔트리로 `@Inject`하는데, 이건 정확히 1.0.2에서 겪었던
+"tsup splitting으로 엔트리마다 클래스가 중복 번들링돼 DI/instanceof가 깨지는" 버그 클래스와
+같은 위험이다 — 이번엔 실제 NestJS 앱을 부팅해서 `app.get(GrpcTraceAccessLogInterceptor)`가
+제대로 해결되는지까지 확인하는 스모크 테스트가 미리 추가돼 있었다(이 세션에서 반복
+발견해온 문제 유형이 forge 쪽 검증 관행에도 누적 반영되고 있는 것으로 보임).
+
+**실제 변경 파일(msa-checkout)**:
+- `package.json` — `@paikpaik/node-forge` `^1.0.6` → `^1.0.7`
+- `src/shared/trace/*` 전체 삭제, `src/gateway/middleware/trace-access-log.middleware.ts` 삭제
+- 4개 gRPC 클라이언트 wrapper — `buildOutgoingMetadata()`(로컬) → `buildOutgoingTraceMetadata()`
+  (node-forge)
+- orchestrator/order-service/inventory-service의 gRPC 컨트롤러 3개, `gateway/app.module.ts` —
+  `GrpcTraceAccessLogInterceptor`/`TraceAccessLogMiddleware` import를 node-forge로 전환
+
+**실제 컨테이너 검증**: 이전 라운드와 동일한 시나리오(`POST /checkout` → 응답 헤더
+traceparent → gateway/orchestrator 로그 grep) 재현 — traceId **값**은 정확히 일치 확인.
+saga CONFIRMED, order-service/inventory-service access log 정상. vitest 22개, tsc 클린.
+
+**새로 발견한 버그**: gateway 로그의 `traceId`가 `a3ee3f87-ee14-4dff-a759-85c3476d8d2b`
+(하이픈 포함 UUID)인 반면 orchestrator 로그는 `a3ee3f87ee144dffa75985c3476d8d2b`(하이픈 없는
+32-hex)로 찍혀서, 값은 같은데 문자열이 달라 "traceId로 정확 일치 grep"이 깨진다. 원인은
+`TraceAccessLogMiddleware`/`GrpcTraceAccessLogInterceptor`(그리고 이전부터 있던
+`logger/fastify` 플러그인)가 새 trace를 발급할 때 `crypto.randomUUID()`를 하이픈 그대로
+쓰기 때문 — `buildTraceparent`가 전파 시점에만 하이픈을 제거해서 정규화하다 보니 발급
+지점과 전파받은 지점의 표현이 어긋난다. 제안서 작성 완료
+(`proposals/node-forge/20260726/20260726-trace-id-format-inconsistency.md`).
+
+**계획과의 차이**: 없음.
+
+### 후속 (2026-07-26) — node-forge 1.0.8 채택: traceId 포맷 불일치 완전 해결
+
+바로 앞 라운드에서 재현·제안한 traceId 문자열 불일치 버그가 1.0.8로 수정 반영됐다는 알림 —
+실제 커밋(`c042691`)을 읽어 확인. 제안한 그대로 `core`에 `generateTraceId()`(32-char hex,
+하이픈 없이 직접 발급) 헬퍼가 추가됐고, `logger/nestjs`(`TraceAccessLogMiddleware`),
+`grpc/nestjs`(`GrpcTraceAccessLogInterceptor`), 그리고 이번에 처음 손댄 게 아니라 원래부터
+있던 `logger/fastify` 플러그인까지 **세 곳 전부** `crypto.randomUUID()` → `generateTraceId()`
+로 교체됨 — 제안서에서 지적한 fastify 쪽도 함께 고쳐졌다.
+
+msa-checkout 쪽은 API 변경이 없어 `package.json`의 버전만 `^1.0.7` → `^1.0.8`로 올리면 끝.
+
+**실제 컨테이너 검증**: 이전과 동일하게 `POST /checkout` → 응답 헤더 traceparent로
+gateway/orchestrator 로그를 확인 — 이번엔 **문자열까지 완전히 동일**
+(`b5695a1710d1bfef3a12bb0b05cea0ef`)함을 확인했고, `docker compose logs gateway
+orchestrator | grep -c "\"traceId\":\"$TRACE_ID\""`로 정확 일치 검색이 2건(양쪽 다) 잡히는
+것까지 확인 — "traceId 하나로 grep해서 전체 경로 추적"이라는 관측 기능의 원래 목표가 이제
+완전히 달성됐다. saga CONFIRMED, vitest 22개 통과.
+
+**계획과의 차이**: 없음.
+
+이걸로 `20260725-nestjs-trace-propagation.md`(1.0.7로 반영) →
+`20260726-trace-id-format-inconsistency.md`(1.0.8로 반영) 두 제안서 모두 실제 반영까지
+확인 완료.
+
+관련 플랜: `.claude-plans/20260725/msa-checkout.md`,
+`.claude-plans/20260725/msa-checkout-gateway-hardening.md` (실행 이력 포함).

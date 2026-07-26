@@ -1,5 +1,6 @@
-import { Controller } from "@nestjs/common";
+import { Controller, UseInterceptors } from "@nestjs/common";
 import { GrpcMethod } from "@nestjs/microservices";
+import { GrpcTraceAccessLogInterceptor } from "@paikpaik/node-forge/grpc/nestjs";
 import { SagaService } from "./saga.service";
 
 interface StartCheckoutRequest {
@@ -13,6 +14,7 @@ interface GetSagaStatusRequest {
 }
 
 @Controller()
+@UseInterceptors(GrpcTraceAccessLogInterceptor)
 export class SagaController {
   constructor(private readonly sagaService: SagaService) {}
 

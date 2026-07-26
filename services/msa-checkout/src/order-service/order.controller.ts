@@ -1,5 +1,6 @@
-import { Controller } from "@nestjs/common";
+import { Controller, UseInterceptors } from "@nestjs/common";
 import { GrpcMethod } from "@nestjs/microservices";
+import { GrpcTraceAccessLogInterceptor } from "@paikpaik/node-forge/grpc/nestjs";
 import { OrderService } from "./order.service";
 
 interface TryCreateOrderRequest {
@@ -15,6 +16,7 @@ interface OrderRequest {
 }
 
 @Controller()
+@UseInterceptors(GrpcTraceAccessLogInterceptor)
 export class OrderController {
   constructor(private readonly orderService: OrderService) {}
 

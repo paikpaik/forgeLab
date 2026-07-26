@@ -19,6 +19,8 @@ forge-lab에서 `@paikpaik/node-forge`, `@paikpaik/kafka-forge`를 실 소비자
 | 1.0.5 | MEDIUM (기능 gap) | gRPC 클라이언트를 쓰는 서비스가 다중 인스턴스로 스케일될 때, grpc-js 기본 LB 정책(`pick_first`)이 최초 연결한 인스턴스에 고정돼서 나머지 인스턴스가 트래픽을 못 받음(조용히 실패, 에러 없음) — msa-checkout에서 `docker stats` NET I/O 실측으로 재현·검증 | `grpc` 모듈 신설(`buildGrpcClientChannelOptions`/`createGrpcClientOptions` 등) — `dns:///` 스킴 + `round_robin` LB가 기본값 |
 | 1.0.5 | MEDIUM (기능 gap) | bearer 토큰 인증이 필요한 서비스마다 HMAC/JWT를 직접 구현해야 했음(waiting-room, msa-checkout이 구조적으로 동일한 코드를 두 번 작성) | `auth` 모듈 신설(`signToken`/`verifyToken`, `auth/nestjs`의 `JwtAuthModule`/`JwtAuthGuard`/`RolesGuard`/`Roles`) — Account 영속화나 refresh-token 등은 스코프 제외, 발급/검증/가드까지만 |
 | 1.0.6 | HIGH | 1.0.5에서 막 추가된 `auth/nestjs`의 `RolesGuard`가 생성자의 `Reflector` 타입 추론에만 의존(파라미터 데코레이터 없음)하는데, tsup(esbuild) 빌드가 `emitDecoratorMetadata`의 `design:paramtypes`를 방출하지 않아 실제 배포된 `dist`에서는 `Reflector`가 `undefined`로 주입됨 — `@Roles()`가 붙은 모든 라우트가 500. 소스 레벨 테스트로는 못 잡고 실제 설치해서 실행해야만 드러남 | `constructor(@Inject(Reflector) private readonly reflector: Reflector)`로 파라미터 데코레이터 명시. 같은 원인의 버그가 있던 `EventsExplorer`(discovery/scanner/reflector)도 함께 발견해 동일하게 수정. 스모크 테스트에 `self:paramtypes` 메타데이터 검증 + `EventsModule` 실제 부팅 테스트를 추가해 이런 종류의 버그를 CI에서 재발 방지 |
+| 1.0.7 | MEDIUM (기능 gap) | NestJS 쪽에는 요청 단위 trace ID 전파/access log 기능이 없어서(fastify에는 이미 있었음) 소비 서비스가 매번 직접 구현해야 했음 — msa-checkout에서 로컬로 구현·검증한 뒤 제안 | `core`에 `runWithRequestContext`/`getRequestContext`(AsyncLocalStorage 래퍼) 신설, `logger/nestjs`에 `TraceAccessLogMiddleware`, `grpc/nestjs`에 `buildOutgoingTraceMetadata`/`GrpcTraceAccessLogInterceptor` 추가. 크로스 엔트리 DI(1.0.2류 버그) 재발을 막기 위해 실제 앱 부팅까지 하는 스모크 테스트 포함 |
+| 1.0.8 | MEDIUM (데이터 정합성) | 1.0.7에서 막 추가된 trace 발급 로직이 새 trace를 시작할 때 `crypto.randomUUID()`를 하이픈 그대로 써서, trace를 새로 연 프로세스 자신의 로그(하이픈 포함)와 그걸 전파받은 하위 프로세스의 로그(`buildTraceparent`가 정규화한 하이픈 없는 32-hex)가 값은 같은데 문자열이 달라 "traceId로 정확 일치 grep"이 깨짐 — msa-checkout에서 gateway/orchestrator 로그를 실제로 비교해 재현 | `core`에 `generateTraceId()`(32-char hex를 하이픈 없이 직접 발급) 헬퍼 신설, `logger/nestjs`/`grpc/nestjs`/`logger/fastify`(1.0.7 이전부터 있던 코드까지) 세 곳 전부 `crypto.randomUUID()` → `generateTraceId()`로 교체 |
 
 ## @paikpaik/kafka-forge
 
@@ -41,7 +43,11 @@ IdempotencyStore 인터페이스는 갭 없이 그대로 사용 가능했음.
 msa-checkout(4번째 실험)이 처음으로 node-forge에 `grpc`/`auth` 신규 모듈을 요청 → 1.0.5로
 반영 확인. 반영된 `auth/nestjs`의 `RolesGuard`에서 새 버그(실제 배포 `dist`에서 `Reflector`
 DI 실패)를 발견해 제안서 작성 → 1.0.6으로 즉시 수정 반영까지 확인(로컬 서브클래싱 우회 코드는
-반영 즉시 제거하고 원래대로 되돌림).
+반영 즉시 제거하고 원래대로 되돌림). 이어서 API 게이트웨이 5대 책임 감사 중 관측(trace
+전파) 요구가 생겨 로컬로 구현·검증한 뒤 제안 → 1.0.7로 반영 확인. 반영된 trace 발급 로직에서
+새 버그(새로 발급하는 traceId가 하이픈 포함 UUID라 전파된 값과 문자열 표현이 어긋남)를
+추가로 발견해 제안서 작성 → 1.0.8로 하루 만에 수정 반영까지 확인. 실제로 gateway/orchestrator
+로그의 traceId가 문자열까지 정확히 일치하는 것을 `grep -c`로 재검증했다.
 
 ---
 

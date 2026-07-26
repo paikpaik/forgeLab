@@ -24,8 +24,8 @@ services:
       secrets:
         - npm_token
     command: ["node", "dist/orchestrator/main.js"]
-    ports:
-      - "${ORCHESTRATOR_PORT:-3301}:3301"
+    # 호스트 포트를 노출하지 않는다 — gateway가 유일한 진입점이어야 "내부 IP/port 은닉"이
+    # 실질적으로 성립한다. /health, /metrics 확인은 `docker exec` 또는 gateway 경유로 한다.
     environment:
       PORT: 3301
       GRPC_PORT: 50051
@@ -50,8 +50,7 @@ services:
       secrets:
         - npm_token
     command: ["node", "dist/order-service/main.js"]
-    ports:
-      - "${ORDER_SERVICE_PORT:-3302}:3302"
+    # 호스트 포트를 노출하지 않는다 — orchestrator와 동일한 이유(gateway만 유일한 진입점).
     environment:
       PORT: 3302
       GRPC_PORT: 50052

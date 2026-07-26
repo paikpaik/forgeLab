@@ -1,5 +1,6 @@
-import { Controller } from "@nestjs/common";
+import { Controller, UseInterceptors } from "@nestjs/common";
 import { GrpcMethod } from "@nestjs/microservices";
+import { GrpcTraceAccessLogInterceptor } from "@paikpaik/node-forge/grpc/nestjs";
 import { InventoryService } from "./inventory.service";
 
 interface TryReserveRequest {
@@ -23,6 +24,7 @@ interface GetStockRequest {
 }
 
 @Controller()
+@UseInterceptors(GrpcTraceAccessLogInterceptor)
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
