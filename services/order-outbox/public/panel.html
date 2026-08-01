@@ -24,7 +24,12 @@
   .stage.published { background: #fff4e0; color: #9a6400; }
   .stage.confirmed { background: #e6f4ea; color: #1a7f4b; }
 
-  .dead-row { font-size: 0.78rem; color: #7c2d12; padding: 0.3rem 0; border-bottom: 1px dashed #f3d9c4; }
+  .dead-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+    font-size: 0.78rem; color: #7c2d12; padding: 0.3rem 0; border-bottom: 1px dashed #f3d9c4;
+  }
+  .dead-row .msg { flex: 1; }
+  .dead-row button { flex-shrink: 0; font-size: 0.72rem; padding: 0.2rem 0.6rem; }
 </style>
 </head>
 <body>
@@ -67,6 +72,7 @@
         <li><strong>3단계 지연 확인</strong> — "주문 생성"을 누르면 목록에 <span class="stage created">생성됨</span>으로 바로 나타납니다. 몇 초 뒤 outbox 폴러(기본 5초 주기)가 발행하면 <span class="stage published">발행됨</span>으로 바뀌고, fulfillment 컨슈머가 반영하면 <span class="stage confirmed">확인됨</span>으로 바뀝니다. "발행됨"은 발행-소비가 폴링 주기보다 빠르게 끝나면 목록 배지로는 못 보고 지나칠 수 있는데, 이벤트 로그는 서버가 내려주는 실제 시각으로 재구성해서 두 전이 모두 놓치지 않고 보여줍니다.</li>
         <li><strong>원자성 확인</strong> — 주문 저장과 outbox 기록이 같은 트랜잭션이라, "생성됨" 상태로 목록에 뜬 주문은 반드시 언젠가 발행됩니다(둘 중 하나만 성공하는 경우가 없음).</li>
         <li><strong>발행 실패 격리 확인</strong> — "발행 실패 유발"을 누르면 일부러 실패하는 주문을 하나 만듭니다. 재시도 5번(약 20~25초) 동안은 계속 시도되다가, 그 이후엔 "죽은 레코드" 목록으로 격리돼서 더 이상 재시도되지 않습니다 — 그 사이에 다른 정상 주문을 생성해보면, 죽은 레코드 하나가 나머지 주문의 발행을 막지 않는다는 것도 확인할 수 있습니다.</li>
+        <li><strong>죽은 레코드 복구</strong> — 죽은 레코드 목록에서 "복구"를 누르면 서버가 원인(이 데모에서는 유효하지 않은 토픽)을 정상으로 고친 뒤 재시도 대상으로 되돌립니다. 몇 초 뒤 주문 목록에서 실제로 "발행됨" → "확인됨"으로 이어지는 걸 확인할 수 있습니다 — 관측만 되고 되살릴 방법이 없던 걸 실제로 대응까지 할 수 있게 한 부분입니다.</li>
         <li><strong>관측 지표</strong> — api의 <a href="/metrics" target="_blank" rel="noopener">/metrics</a>에서 생성 건수(<code>order_outbox_orders_created_total</code>), 발행 지표(<code>kafka_forge_produced_total</code>)를 확인할 수 있습니다. fulfillment의 <code>:3201/metrics</code>에서는 소비 지표(<code>kafka_forge_consumed_total</code>)를 볼 수 있습니다.</li>
       </ol>
     </div>
@@ -156,11 +162,30 @@
         ? data.recent
             .map(
               (rec) =>
-                '<div class="dead-row">' + rec.key.slice(0, 8) + "… — " + rec.attempts + "번 실패 — " +
-                rec.lastError + "</div>",
+                '<div class="dead-row"><span class="msg">' + rec.key.slice(0, 8) + "… — " + rec.attempts + "번 실패 — " +
+                rec.lastError + '</span><button data-revive-id="' + rec.id + '">복구</button></div>',
             )
             .join("")
         : '<div class="hint">아직 죽은 레코드가 없습니다</div>';
+
+      list.querySelectorAll("button[data-revive-id]").forEach((btn) => {
+        btn.addEventListener("click", () => reviveDead(btn.getAttribute("data-revive-id")));
+      });
+    }
+
+    // "복구"는 재시도 카운터만 리셋하는 게 아니라, 이 데모의 유일한 실패 원인(poison topic)을
+    // 서버가 정상 토픽으로 고쳐준 뒤 되살린다 — 그래서 revive 후에는 실제로 발행까지
+    // 성공하는 걸 볼 수 있다(원인을 안 고치고 재시도만 하면 몇 초 뒤 다시 죽는 게 정상 동작).
+    async function reviveDead(id) {
+      const res = await fetch("/admin/outbox/dead/" + id + "/revive", { method: "POST" });
+      const body = await res.json();
+      logEvent(
+        res.ok
+          ? "죽은 레코드 복구함 (id " + id.slice(0, 8) + "…) — 다음 폴링에 재발행 시도됩니다"
+          : "복구 실패: " + JSON.stringify(body),
+      );
+      await refreshDead();
+      await refreshOrders();
     }
 
     document.getElementById("order-btn").addEventListener("click", createOrder);

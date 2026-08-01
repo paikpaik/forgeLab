@@ -30,3 +30,11 @@ export const DLQ_TOTAL_KEY = "dlq:score-event:total";
 // 실패를 던진다 — 재시도(3회)까지 다 소진되면 DLQ로 이동하는 걸 실제로 눈으로 확인하기 위한
 // 테스트/데모 전용 트리거. 정상적인 유저 흐름과는 무관하다.
 export const DLQ_TEST_USER_ID = "__dlq-test__";
+
+// panel.html의 "크래시 윈도우 재현" 버튼이 이 userId로 이벤트를 보내면, claim(선점)과 이펙트
+// 적용(zincrby) 사이에 일부러 지연을 넣는다 — 그 지연 동안 컨테이너를 강제 종료(docker kill)
+// 하면 "선점은 됐는데 이펙트는 반영 안 된" 크래시 윈도우를 사람이 직접 타이밍을 맞춰 재현할
+// 수 있다(두 Redis 호출 사이의 자연 발생 간격은 수 ms라 타이밍을 맞추는 게 사실상 불가능해서
+// 일부러 넓힘). 정상 유저 흐름과는 무관한 테스트/데모 전용 트리거.
+export const CRASH_TEST_USER_ID = "__crash-test__";
+export const CRASH_TEST_DELAY_MS = 8000;

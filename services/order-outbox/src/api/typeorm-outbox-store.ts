@@ -3,7 +3,8 @@ import { InjectDataSource } from "@paikpaik/node-forge/database/nestjs";
 import type { DataSource } from "typeorm";
 import { IsNull, Not } from "typeorm";
 import type { OutboxRecord, OutboxStore } from "@paikpaik/kafka-forge";
-import { OUTBOX_MAX_ATTEMPTS } from "../shared/constants";
+import { OUTBOX_MAX_ATTEMPTS, OUTBOX_POISON_TOPIC } from "../shared/constants";
+import { OrderCreated } from "../shared/order-created.contract";
 import { OutboxRecordEntity } from "../entities/outbox-record.entity";
 
 export interface DeadOutboxRecord {
@@ -85,5 +86,21 @@ export class TypeormOutboxStore implements OutboxStore {
         deadAt: row.deadAt,
       })),
     };
+  }
+
+  // 죽은 레코드를 되살려서 OutboxPublisherService가 다음 폴링에 다시 발행 시도하게 한다.
+  // 이 랩에서 레코드가 죽는 유일한 경로는 데모용 poison topic(실제로 유효하지 않은 토픽이라
+  // 몇 번을 재시도해도 다시 죽음)이라, deadAt/attempts만 리셋하면 몇 초 뒤 똑같이 죽어서
+  // "복구"가 아무 일도 안 한 것처럼 보인다. 실무에서 "복구"는 원인을 고친 뒤에야 의미가
+  // 있으므로, poison topic이면 정상 토픽으로 되돌려서 원인 수정까지 포함한 복구를
+  // 시뮬레이션한다(실제 운영이라면 이 자리가 "잘못된 토픽/스키마를 고친 뒤 재시도"에 해당).
+  async revive(id: string): Promise<{ revived: boolean }> {
+    const repo = this.dataSource.getRepository(OutboxRecordEntity);
+    const record = await repo.findOneBy({ id });
+    if (!record || record.deadAt === null) return { revived: false };
+
+    const fixedTopic = record.topic === OUTBOX_POISON_TOPIC ? OrderCreated.topic : record.topic;
+    await repo.update(id, { deadAt: null, attempts: 0, lastError: null, topic: fixedTopic });
+    return { revived: true };
   }
 }

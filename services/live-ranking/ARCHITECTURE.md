@@ -28,17 +28,17 @@ flowchart TB
         랭킹 그리드 · 이벤트 시뮬레이션`"]
         CONS["`**ScoreEventConsumer**
         StandardConsumer.subscribe
-        재시도/DLQ는 kafka-forge가 자체 처리`"]
-        IDEM["`**RedisIdempotencyStore**
-        eventId 기준 dedup`"]
+        재시도/DLQ는 kafka-forge가 자체 처리
+        idempotencyStore 안 씀(아래 참고)`"]
         RAPI["`**RankingController**
         top / users/:id / reset`"]
         RSVC["`**RankingService**
-        zincrby · getTopN · getRankAndScore`"]
+        applyDeltaOnce: claim+zincrby 원자화(Lua)
+        getTopN · getRankAndScore`"]
         DLQCONS["`**ScoreEventDlqConsumer**
         .dlq 토픽 구독(별도 컨슈머 그룹)`"]
         DLQAPI["`**DlqController**
-        GET/DELETE /dlq`"]
+        GET/DELETE /admin/dlq`"]
     end
 
     subgraph KAFKA["Redpanda (Kafka 호환)"]
@@ -70,11 +70,10 @@ flowchart TB
     IAPI --> PROD
     PROD -->|send| TOPIC
     TOPIC -->|subscribe| CONS
-    CONS -->|"wasProcessed/markProcessed"| IDEM
-    IDEM -->|"get/set"| IDEMKEY
     CONS -->|"재시도 소진"| DLQ
     CONS --> RSVC
-    RSVC -->|"zincrby"| ZSET
+    RSVC -->|"EVAL(claim+zincrby 원자화)"| ZSET
+    RSVC -->|"EVAL(claim+zincrby 원자화)"| IDEMKEY
     RAPI --> RSVC
     RSVC -->|"getTopN/getRankAndScore"| ZSET
     DLQ -->|subscribe| DLQCONS
@@ -95,7 +94,7 @@ flowchart TB
     classDef forgeNode fill:#f5f3ff,stroke:#7c3aed,stroke-width:1.5px,color:#4c1d95
 
     class U,PANEL entryNode
-    class IAPI,PROD,CONS,IDEM,RAPI,RSVC,DLQCONS,DLQAPI logicNode
+    class IAPI,PROD,CONS,RAPI,RSVC,DLQCONS,DLQAPI logicNode
     class ZSET,IDEMKEY,DLQLOG redisNode
     class TOPIC,DLQ kafkaNode
     class NF,KF forgeNode
@@ -130,7 +129,7 @@ flowchart TB
 | 키 | 타입 | 용도 |
 |---|---|---|
 | `ranking:{leaderboardId}` | ZSET | member=`userId`, score=누적 점수(`zincrby`) |
-| `idempotency:score-event:{eventId}` | STRING (TTL 1시간) | `claim`/`release`가 선점 상태를 기록(성공하면 유지, 재시도 소진되면 `release`로 삭제) |
+| `idempotency:score-event:{eventId}` | STRING (TTL 1시간) | 2026-08-01부터 `RankingService.applyDeltaOnce()`의 Lua 스크립트가 `zincrby`와 같은 원자적 호출 안에서 SET NX로 직접 관리(과거엔 `RedisIdempotencyStore.claim`/`release`가 별도 호출로 관리 — 아래 2026-08-01 후속 참고) |
 | `dlq:score-event:log` | LIST (최근 `DLQ_LOG_LIMIT`건만, `ltrim`으로 물리적으로 유지) | DLQ로 이동한 이벤트를 사람이 볼 수 있게 옮겨 담은 확인용 사본 |
 | `dlq:score-event:total` | STRING(정수), `incr` | DLQ로 이동한 이벤트의 실제 누적 총량(리스트는 `ltrim`으로 잘려서 이 값이 진짜 총량) |
 
@@ -146,17 +145,17 @@ flowchart TB
 | 결정 | 이유 |
 |---|---|
 | producer(ingest)와 consumer(aggregator)를 같은 npm workspace, 다른 프로세스/포트로 분리 | "producer/consumer가 같은 포트를 쓰는 게 이상하다"는 판단에 따라 진짜 분리된 프로세스로 검증하면서도, dashboard 입장에서는 여전히 실험 하나(탭 하나)로 다룬다. Dockerfile은 하나만 만들고 `docker-compose.yml`의 `command:`로만 구분 |
-| 멱등성 저장소를 Redis로 직접 구현(`RedisIdempotencyStore`) | kafka-forge는 `IdempotencyStore` 인터페이스만 제공하고 구현은 소비 서비스 책임으로 둔다(저장소 비의존 원칙). 기본 제공되는 `InMemoryIdempotencyStore`는 프로세스 재시작 시 초기화되어 "consumer 크래시 후 재시작 → 재배달"에서는 dedup을 못 한다 — Redis에 저장해 재시작을 넘어서도 dedup이 유지되는 걸 실제로 확인함(아래 검증 참고) |
+| 멱등성 저장소를 Redis로 직접 구현(`RedisIdempotencyStore`, **2026-08-01 제거됨** — 아래 후속 참고) | kafka-forge는 `IdempotencyStore` 인터페이스만 제공하고 구현은 소비 서비스 책임으로 둔다(저장소 비의존 원칙). 기본 제공되는 `InMemoryIdempotencyStore`는 프로세스 재시작 시 초기화되어 "consumer 크래시 후 재시작 → 재배달"에서는 dedup을 못 한다 — Redis에 저장해 재시작을 넘어서도 dedup이 유지되는 걸 실제로 확인함(아래 검증 참고) |
 | dedupeKey를 `eventId`로 지정 (기본값인 `topic:partition:offset` 대신) | offset 기준 dedup은 재처리 시 offset이 달라지면 무력화된다. 비즈니스 키(eventId)로 지정해야 "같은 이벤트"를 진짜로 식별한다 |
 | 재시도/DLQ는 커스텀 구현 없이 kafka-forge `StandardConsumer` 기본값 사용 | 이미 재시도(3회, 지수 backoff)와 DLQ 이동을 자체 제공하므로 직접 만들 이유가 없음 — kafka-forge를 실사용 검증하는 게 이 실험의 목적이기도 함 |
 | 랭킹 로직에 node-forge 제안서 불필요 | `zincrby`/`zrevrank`/`getTopN`/`getRankAndScore`가 이미 1.0.3에 존재 — waiting-room 때 발견한 `zadd` NX/XX 갭과 달리 이번엔 갭이 없었음 |
 | partitionKey = `leaderboardId` | 같은 리더보드의 이벤트를 같은 파티션에 모아, 파티션 단위 관측(consumer lag 등)이 리더보드 단위로 단순해짐 |
 | producer는 `idempotent: true, maxInFlightRequests: 1` | kafkajs/브로커 레벨에서 네트워크 재시도로 인한 중복 발행을 막는다. eventId 기반 dedup(consumer 쪽)과는 다른 계층의 멱등성 |
 | `/metrics` 하나로 통합 (kafka-forge 1.0.2) | 처음엔 node-forge `MetricsModule.forRoot()`의 `/metrics`와 kafka-forge의 별도 레지스트리(`kafka_forge_*`)를 합칠 방법이 없어 `/metrics/kafka`로 따로 노출했다. kafka-forge에 `registerMetricsInto(registry)` 추가를 제안(`proposals/kafka-forge/20260717-metrics-registry-merge.md`) → 1.0.2에 반영되어 `main.ts`에서 `registerMetricsInto(forgeMetrics.registry)` 한 번 호출로 통합, `/metrics/kafka` 컨트롤러는 제거 |
-| 멱등성 스킵 카운터는 kafka-forge 표준 지표 사용 (kafka-forge 1.0.2) | 처음엔 `RedisIdempotencyStore.wasProcessed()` 안에서 직접 카운터를 증가시켰으나, 구현체마다 지표 이름이 달라지면 서비스 간 비교가 어렵다고 판단해 `kafka_forge_deduped_total` 추가를 제안(`proposals/kafka-forge/20260717-consumer-dedup-metric.md`) → 1.0.2에 반영되어 `StandardConsumer`가 자체적으로 잡아주므로 자체 카운터(`scoreEventsDeduped`)는 제거 |
+| 멱등성 스킵 카운터는 kafka-forge 표준 지표 사용 (kafka-forge 1.0.2, **2026-08-01부터 다시 로컬 카운터로 전환** — 아래 후속 참고) | 처음엔 `RedisIdempotencyStore.wasProcessed()` 안에서 직접 카운터를 증가시켰으나, 구현체마다 지표 이름이 달라지면 서비스 간 비교가 어렵다고 판단해 `kafka_forge_deduped_total` 추가를 제안(`proposals/kafka-forge/20260717-consumer-dedup-metric.md`) → 1.0.2에 반영되어 `StandardConsumer`가 자체적으로 잡아주므로 자체 카운터(`scoreEventsDeduped`)는 제거 |
 | vitest로 핵심 로직(랭킹 반영/조회/리셋, 멱등성 저장소, 이벤트 스키마)에 유닛테스트 | 실제 Redis/Kafka 없이 `ForgeRedisClient`의 필요한 메서드만 인메모리로 구현한 fake로 검증 (waiting-room과 동일 패턴) |
 | 패널에 "같은 이벤트 두 번 보내기" 버튼 추가 | 냉정한 분석 중 발견 — 봇 시뮬레이션/+10점 버튼은 매번 새 `eventId`를 써서 멱등성 검증 경로를 전혀 안 지나갔다. 이 실험의 핵심(재배달돼도 중복 안 됨)을 UI만으로는 아무도 확인할 수 없었던 문제를 해결 |
-| 멱등성 선점은 `claim`으로, `wasProcessed`/`markProcessed`는 인터페이스 호환용으로만 유지 (kafka-forge 1.0.3) | 처음엔 "체크 → 이펙트 적용 → 마킹(사후)" 순서라, 이펙트 적용 후 마킹 전에 크래시/리밸런스가 나면 재배달 시 중복 반영되는 크래시 윈도우가 있었다. 이펙트 실행 "전" 원자적 선점을 제안(`proposals/kafka-forge/20260717-idempotency-claim-before-effect.md`) → 1.0.3에 `IdempotencyStore.claim`으로 반영, `StandardConsumer`가 있으면 핸들러 실행 *전*에 이걸로 선점하고 사후 마킹은 스킵한다. `RedisIdempotencyStore.claim()`은 node-forge의 기존 분산 락(`lock()`, SET NX PX)을 그대로 재사용해서 구현 — node-forge 쪽 변경은 불필요했음. 트레이드오프: 크래시가 선점 이후 이펙트 완료 전에 나면 그 메시지는 유실(과소 반영)될 수 있음 — 리더보드 점수가 부풀려지는 것보다 낫다고 판단해 받아들임 |
+| 멱등성 선점은 `claim`으로, `wasProcessed`/`markProcessed`는 인터페이스 호환용으로만 유지 (kafka-forge 1.0.3, **2026-08-01부터 이 방식 자체를 이 이벤트에는 안 씀** — 아래 후속 참고) | 처음엔 "체크 → 이펙트 적용 → 마킹(사후)" 순서라, 이펙트 적용 후 마킹 전에 크래시/리밸런스가 나면 재배달 시 중복 반영되는 크래시 윈도우가 있었다. 이펙트 실행 "전" 원자적 선점을 제안(`proposals/kafka-forge/20260717-idempotency-claim-before-effect.md`) → 1.0.3에 `IdempotencyStore.claim`으로 반영, `StandardConsumer`가 있으면 핸들러 실행 *전*에 이걸로 선점하고 사후 마킹은 스킵한다. `RedisIdempotencyStore.claim()`은 node-forge의 기존 분산 락(`lock()`, SET NX PX)을 그대로 재사용해서 구현 — node-forge 쪽 변경은 불필요했음. ~~트레이드오프: 크래시가 선점 이후 이펙트 완료 전에 나면 그 메시지는 유실(과소 반영)될 수 있음 — 리더보드 점수가 부풀려지는 것보다 낫다고 판단해 받아들임~~ → **이 "받아들인 트레이드오프"가 실제로 2026-08-01에 docker kill로 재현되어 진짜 버그로 확정, claim+이펙트 원자화로 완전히 해소함(아래 후속 참고)** |
 | DLQ 전용 컨슈머는 `defineDlqEvent(ScoreEvent)`로 구성 (kafka-forge 1.0.4) | 처음엔 `toDlqTopicName()`이 만드는 `<topic>.dlq`가 kafka-forge 자신의 토픽 네이밍 컨벤션을 안 지켜서 `defineEvent()`가 던지는 걸 `EventContract` 리터럴로 직접 우회했다. envelope 스키마(`{payload, error, failedAt}`)를 매번 손으로 정의해야 하는 보일러플레이트를 없애자고 제안(`proposals/kafka-forge/20260719-dlq-topic-naming-helper.md`) → 1.0.4에 `defineDlqEvent()`로 반영, 우리 쪽 `DlqEnvelopeSchema` 수동 정의를 제거하고 `defineDlqEvent(ScoreEvent)` 한 줄로 교체 |
 | DLQ 전용 컨슈머는 `retry: false` + 핸들러 내부에서 모든 예외를 삼킴 | 여기서 예외가 새 나가면 kafka-forge가 "이 DLQ의 DLQ"(`...v1.dlq.dlq`)로 보내려 하는데, 그 이름도 네이밍 컨벤션을 어겨서 `assertValidTopicName`이 또 던진다 — 무한히 재귀하는 실패를 막기 위해 이 컨슈머의 핸들러는 절대 예외를 밖으로 던지지 않고 로그만 남긴다 |
 | DLQ 로그는 `ltrim`으로 최근 N건만 물리적으로 유지, 누적 총량은 별도 `incr` 카운터로 분리 (node-forge 1.0.4) | 리스트를 무한히 자라게 두던 걸 `ltrim` 추가로 제안(`proposals/node-forge/20260719-list-ltrim.md`) → 1.0.4에 반영. 다만 리스트를 자르면 `llen`으로는 더 이상 "총 몇 건 실패했는지"를 알 수 없어서, `dlq:score-event:total`(incr)로 누적 총량을 따로 센다 — "지우기"는 이 총량은 안 지우고 목록만 비운다(실제로 있었던 일은 지우지 않는다는 의미) |
@@ -285,3 +284,55 @@ msa-checkout에는 SSE를 확산하지 않기로 함 — saga 전이가 orchestr
 "포트 은닉"이 의도적 설계)에서 일어나서, cross-origin SSE를 하려면 그 원칙을 깨거나 gRPC
 스트리밍을 새로 만들어야 하는데, 이미 패널 폴링(1.5초)이 실제 상태를 그대로 읽어와 큰 지연이
 없어 비용 대비 이득이 낮다고 판단(사용자 확인).
+
+### 후속 (2026-08-01) — claim+이펙트 크래시 윈도우 실제 재현 및 원자화로 완전 해소 (오래된 P0)
+
+우선순위 정리 때부터 "유닛테스트 계약으로만 검증됐지 실제 timed process-kill 재현이 없다"고
+남아있던 P0. msa-checkout 오케스트레이터 크래시 테스트와 같은 방법론(정밀 타이밍
+`docker kill`)으로 실제 재현했다.
+
+**재현(수정 전)**: `claim()`(SET NX)과 이펙트(`zincrby`) 사이에 일부러 8초 지연을 넣는
+`CRASH_TEST_USER_ID` 트리거를 임시로 추가하고, claim 성공 로그가 찍히는 순간을
+`docker logs`로 감시하다가 그 즉시(`docker kill`) 컨테이너를 강제 종료 → 재시작 → 재배달까지
+정밀 타이밍으로 재현:
+- 점수 조회 결과 `{"rank":null,"score":null}` — **이펙트가 영구히 유실됨**
+- `kafka_forge_deduped_total{topic="ranking.score-events.v1",...}` = **1** — 재배달된 메시지가
+  "이미 처리됨"으로 스킵됨(claim의 SET NX 락은 크래시 전에 이미 걸려 있었으므로)
+
+이게 실제로 확정된 버그다: claim이 성공하면 그 즉시 재배달 방어막이 걸리는데, 그 직후 크래시가
+나면 이펙트는 영영 반영되지 못하고 무한 상실된다(락 TTL 1시간이 지나기 전에 이미 offset이
+커밋되어 다시는 재배달되지 않음).
+
+**수정**: kafka-forge의 `IdempotencyStore.claim()`(핸들러 실행 전 별도 호출)을 이 이벤트에는
+더 이상 안 쓰고, claim+이펙트를 하나의 Redis Lua 스크립트로 원자화했다 — 두 Redis 호출 사이의
+"일부만 된" 중간 상태 자체가 생길 수 없다.
+- `RankingService.applyDeltaOnce(leaderboardId, userId, delta, eventId)` 신설 —
+  `redis.getClient().eval(APPLY_DELTA_ONCE_SCRIPT, ...)`로 "락이 없으면 SET NX + ZINCRBY,
+  있으면 ZSCORE만"을 원자적으로 수행
+- `score-event.consumer.ts`에서 `idempotencyStore`/`dedupeKey` 옵션 제거, 대신
+  `applyDeltaOnce`를 직접 호출(kafka-forge는 이벤트별 "이펙트가 뭔지" 모르므로 이 원자화는
+  kafka-forge가 아니라 소비 서비스 책임 — claim만 떼어 제공하는 인터페이스 구조상 어쩔 수 없음)
+- `RedisIdempotencyStore` 클래스/테스트 완전 삭제(더 이상 쓰는 곳 없음)
+- `kafka_forge_deduped_total`을 더 이상 이 토픽에 못 쓰므로(원자화 경로가 kafka-forge를 안
+  거침), `live_ranking_score_events_deduped_total`로 로컬에서 다시 잼(`RankingMetrics`)
+- 테스트 3건 추가(최초 반영/같은 eventId 재시도 시 no-op/다른 eventId는 누적) — 27개
+  유지(기존 `redis-idempotency-store.test.ts` 8개 삭제 + 3개 추가 = 22개, 이후 admin/dlq
+  라우트 등 이전 변경 포함 총계는 위 SSE 절 참고)
+- `FakeRedisClient`에 `getClient().eval()` 흉내(실제 Lua 인터프리터 없이 같은 계약만 검증)
+- panel.html에 "크래시 윈도우 재현" 카드 신설 — `CRASH_TEST_USER_ID`로 이벤트를 발사하면
+  이펙트 적용 전 8초 지연이 시작되고, 그 사이 `docker kill`로 죽여봐도 안전한지 사람이
+  직접 확인할 수 있음(수정 전엔 유실을 실제로 보여주던 것과 동일한 트리거가, 수정 후엔
+  안전함을 보여주는 회귀 테스트로 그대로 재사용됨)
+
+**검증(수정 후, 실제 컨테이너, 재현과 동일한 정밀 타이밍)**:
+- 같은 방식으로 claim 로그(이제는 "이펙트 적용 전 지연 시작" 로그) 직후 `docker kill` →
+  재시작 → 점수 조회 결과 `{"rank":1,"score":42}` — **정확히 한 번 반영, 유실 없음**
+- 이어서 같은 `eventId`로 한 번 더 발행(진짜 중복 재배달 시뮬레이션) → 점수는 여전히 42
+  (중복 반영 안 됨), `live_ranking_score_events_deduped_total{leaderboardId="default"}` = 1
+  — 유실 방지와 중복 방지 둘 다 원자화 하나로 동시에 성립하는 것까지 확인
+
+트레이드오프: `kafka_forge_deduped_total` 같은 kafka-forge 표준 지표를 이 이벤트 경로에는 더
+이상 못 쓴다(로컬 카운터로 대체). claim과 이펙트를 원자화하려면 이펙트가 뭔지 알아야 하는데
+kafka-forge는 그걸 일부러 모르게 설계돼 있어서(스토리지/도메인 비의존 원칙), 이 원자화는
+node-forge/kafka-forge에 제안할 수 있는 성격이 아니라 소비 서비스가 직접 구현해야 하는
+부분이라고 판단 — 제안서 없이 로컬로 완결.

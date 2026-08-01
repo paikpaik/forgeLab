@@ -2,6 +2,8 @@ import { describe, it, expect, afterEach } from "vitest";
 import type { DataSource } from "typeorm";
 import { createTestDataSource } from "../test-utils/create-test-data-source";
 import { OutboxRecordEntity } from "../entities/outbox-record.entity";
+import { OUTBOX_POISON_TOPIC } from "../shared/constants";
+import { OrderCreated } from "../shared/order-created.contract";
 import { TypeormOutboxStore } from "./typeorm-outbox-store";
 
 let dataSource: DataSource;
@@ -103,5 +105,46 @@ describe("TypeormOutboxStore.markFailed — dead-lettering", () => {
     dataSource = await createTestDataSource();
     const store = new TypeormOutboxStore(dataSource);
     await expect(store.markFailed("no-such-id", new Error("x"))).resolves.toBeUndefined();
+  });
+});
+
+describe("TypeormOutboxStore.revive", () => {
+  it("poison topic으로 죽은 레코드를 되살리면 topic이 정상으로 고쳐지고 다시 fetchPending 대상이 된다", async () => {
+    dataSource = await createTestDataSource();
+    const repo = dataSource.getRepository(OutboxRecordEntity);
+    await repo.save({
+      id: "poison-1",
+      topic: OUTBOX_POISON_TOPIC,
+      key: "order-x",
+      payload: {},
+      publishedAt: null,
+      attempts: 5,
+      lastError: "invalid topic",
+      deadAt: new Date().toISOString(),
+    });
+    const store = new TypeormOutboxStore(dataSource);
+
+    const result = await store.revive("poison-1");
+    expect(result).toEqual({ revived: true });
+
+    const pending = await store.fetchPending(10);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ id: "poison-1", topic: OrderCreated.topic });
+    expect((await store.listDead()).count).toBe(0);
+  });
+
+  it("살아있는(죽지 않은) 레코드는 되살릴 대상이 아니라 revived: false", async () => {
+    dataSource = await createTestDataSource();
+    await seed(dataSource, 1);
+    const store = new TypeormOutboxStore(dataSource);
+    const [record] = await store.fetchPending(10);
+
+    expect(await store.revive(record.id)).toEqual({ revived: false });
+  });
+
+  it("존재하지 않는 id는 revived: false", async () => {
+    dataSource = await createTestDataSource();
+    const store = new TypeormOutboxStore(dataSource);
+    expect(await store.revive("no-such-id")).toEqual({ revived: false });
   });
 });

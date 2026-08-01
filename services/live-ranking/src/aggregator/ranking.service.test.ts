@@ -40,6 +40,29 @@ describe("RankingService.applyDelta", () => {
   });
 });
 
+describe("RankingService.applyDeltaOnce — claim+이펙트 원자화", () => {
+  it("처음 보는 eventId는 반영되고 applied: true", async () => {
+    const { service } = createService();
+    const result = await service.applyDeltaOnce("default", "u1", 10, "event-1");
+    expect(result).toEqual({ applied: true, score: 10 });
+  });
+
+  it("같은 eventId로 다시 호출해도 반영되지 않는다(재배달 시뮬레이션) — applied: false, 점수 불변", async () => {
+    const { service } = createService();
+    await service.applyDeltaOnce("default", "u1", 10, "event-1");
+    const result = await service.applyDeltaOnce("default", "u1", 10, "event-1");
+    expect(result).toEqual({ applied: false, score: 10 });
+    expect(await service.getUserRank("default", "u1")).toEqual({ rank: 1, score: 10 });
+  });
+
+  it("다른 eventId면 같은 유저라도 각각 반영되어 누적된다", async () => {
+    const { service } = createService();
+    await service.applyDeltaOnce("default", "u1", 10, "event-1");
+    const result = await service.applyDeltaOnce("default", "u1", 5, "event-2");
+    expect(result).toEqual({ applied: true, score: 15 });
+  });
+});
+
 describe("RankingService.getTop", () => {
   it("점수 내림차순으로 순위를 매겨 반환한다", async () => {
     const { service } = createService();

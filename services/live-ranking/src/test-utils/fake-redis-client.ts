@@ -100,4 +100,23 @@ export class FakeRedisClient {
     await this.set(key, token, ttlSeconds);
     return token;
   }
+
+  // RankingService.applyDeltaOnce()가 getClient().eval(...)로 실행하는 원자적
+  // claim+zincrby Lua 스크립트(APPLY_DELTA_ONCE_SCRIPT)와 정확히 같은 동작을 실제 ioredis/
+  // Lua 없이 흉내낸다 — 진짜 원자성(동시 실행 격리)까지 테스트하는 건 아니고, "락이 있으면
+  // 스킵, 없으면 잠그고 반영"이라는 계약만 검증한다.
+  getClient(): { eval: (...args: unknown[]) => Promise<[number, string | null]> } {
+    return {
+      eval: async (_script, _numKeys, lockKey, zsetKey, ttlSeconds, member, delta) => {
+        if ((await this.get(lockKey as string)) !== null) {
+          const zset = this.zsets.get(zsetKey as string) ?? new Map<string, number>();
+          const current = zset.get(member as string);
+          return [0, current !== undefined ? String(current) : null];
+        }
+        await this.set(lockKey as string, "1", Number(ttlSeconds));
+        const newScore = await this.zincrby(zsetKey as string, member as string, Number(delta));
+        return [1, String(newScore)];
+      },
+    };
+  }
 }

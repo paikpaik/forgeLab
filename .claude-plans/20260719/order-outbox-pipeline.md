@@ -1,5 +1,22 @@
 ## 플랜 실행 이력
 
+### 후속: 2026-08-01 — OutboxPublisherService.flush() try/catch 추가 (오래된 P0 해소)
+
+kafka-forge `OutboxPublisher.publishPending()` 소스를 다시 읽어서 `fetchPending()`(DB 조회)이
+try/catch 밖에 있다는 걸 확인. redpanda를 내리는 것으로는 재현이 안 됐고(개별 레코드 실패는
+이미 내부에서 흡수됨), **Postgres를 내려야** 재현됨 — `flush()`에 try/catch 추가 후 구조화된
+로그로 정상 캐치되는 것, 폴러가 안 죽고 계속 재시도하는 것, Postgres 복구 후 자동 회복까지
+실제 컨테이너로 검증(자세한 내용은 `ARCHITECTURE.md`의 2026-08-01 후속 참고).
+
+### 후속: 2026-08-01 — 데드레터 레코드 복구(revive) API + UI (오래된 P0 해소)
+
+우선순위 정리 때부터 미뤄져 있던 P0("데드레터 레코드 확인만 되고 복구 수단이 없음")를 처리.
+`TypeormOutboxStore.revive(id)` 추가(poison topic이면 정상 topic으로 고쳐서 재시도 가능하게),
+`POST /admin/outbox/dead/:id/revive` 엔드포인트, panel.html에 "복구" 버튼. 실제 poison 주문을
+만들어 dead-letter까지 재현한 뒤 revive 호출 → 8초 뒤 `stage: confirmed`로 전이되는 것까지
+end-to-end 검증(자세한 내용은 `ARCHITECTURE.md`의 2026-08-01 후속 참고). 유닛 테스트 22개
+전부 통과.
+
 ### 후속: 2026-07-19 (kafka-forge 1.0.5 채택 — outbox 부분 실패/영구 블로킹 수정 + dead-lettering)
 
 "냉정하게 order-outbox를 평가하고 forge 모듈/패널 개선점을 파악해달라"는 요청으로
