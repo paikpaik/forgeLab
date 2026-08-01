@@ -22,6 +22,7 @@ forge-lab에서 `@paikpaik/node-forge`, `@paikpaik/kafka-forge`를 실 소비자
 | 1.0.7 | MEDIUM (기능 gap) | NestJS 쪽에는 요청 단위 trace ID 전파/access log 기능이 없어서(fastify에는 이미 있었음) 소비 서비스가 매번 직접 구현해야 했음 — msa-checkout에서 로컬로 구현·검증한 뒤 제안 | `core`에 `runWithRequestContext`/`getRequestContext`(AsyncLocalStorage 래퍼) 신설, `logger/nestjs`에 `TraceAccessLogMiddleware`, `grpc/nestjs`에 `buildOutgoingTraceMetadata`/`GrpcTraceAccessLogInterceptor` 추가. 크로스 엔트리 DI(1.0.2류 버그) 재발을 막기 위해 실제 앱 부팅까지 하는 스모크 테스트 포함 |
 | 1.0.8 | MEDIUM (데이터 정합성) | 1.0.7에서 막 추가된 trace 발급 로직이 새 trace를 시작할 때 `crypto.randomUUID()`를 하이픈 그대로 써서, trace를 새로 연 프로세스 자신의 로그(하이픈 포함)와 그걸 전파받은 하위 프로세스의 로그(`buildTraceparent`가 정규화한 하이픈 없는 32-hex)가 값은 같은데 문자열이 달라 "traceId로 정확 일치 grep"이 깨짐 — msa-checkout에서 gateway/orchestrator 로그를 실제로 비교해 재현 | `core`에 `generateTraceId()`(32-char hex를 하이픈 없이 직접 발급) 헬퍼 신설, `logger/nestjs`/`grpc/nestjs`/`logger/fastify`(1.0.7 이전부터 있던 코드까지) 세 곳 전부 `crypto.randomUUID()` → `generateTraceId()`로 교체 |
 | 1.0.9 | MEDIUM (기능 gap) | 프로세스 내부 이벤트를 폴링 없이 실시간으로 구독하게 해주는 기능이 없어서, order-outbox가 "생성→발행→확인" 3단계를 SSE로 실시간 스트리밍하려면 매 서비스가 rxjs `Subject` 브로드캐스터 + `@Sse()` 컨트롤러를 직접 구현해야 했음(도메인 로직과 무관한 순수 보일러플레이트) — order-outbox에서 로컬로 구현·Docker 검증한 뒤 제안 | `events` 모듈에 `AdminEventBus<T>`(rxjs `Subject` 기반 멀티캐스트 버스), `events/nestjs`에 `AdminEventsModule.forRoot({ path })`(`ADMIN_EVENT_BUS` 토큰 등록 + `<path>/stream` SSE 컨트롤러를 동적 생성) 추가. `@Controller(path)`를 클래스 선언이 아니라 함수 호출로 동적 적용하는 새 패턴이라, esbuild(tsup) 번들 dist에서도 데코레이터 메타데이터가 살아있는지(1.0.6 RolesGuard류 버그 재발 방지) 자체 smoke-test로 미리 검증해둠 |
+| 1.0.10 | MEDIUM (기능 gap) | 기존 `ForgeCircuitBreaker`(core)는 순수 인메모리·단일 인스턴스 전용이라 회로가 프로세스 하나에 갇힘 — webhook-relay의 delivery-worker처럼 같은 엔드포인트를 여러 인스턴스가 나눠 배달하는 구조에서는 인스턴스별로 회로가 따로 열려서 "임계치 도달 시 요청 차단"이라는 circuit breaker 본연의 목적을 못 이룸(한 인스턴스가 이미 회로를 열어도 다른 인스턴스는 계속 실패 엔드포인트를 두드림). Docker로 실제 2인스턴스 스케일·Kafka 파티션 분산까지 재현해 검증한 뒤 제안 | `redis` 모듈에 `DistributedCircuitBreaker`(+ `DistributedCircuitBreakerOptions{failureThreshold, resetTimeout, keyPrefix?, successThreshold?, onStateChange?}`) 추가 — Redis 해시(`{keyPrefix}:{key}`)에 `state/failures/successes/openedAt`을 저장해 여러 인스턴스가 `key`(엔드포인트 ID 등)당 하나의 회로 상태를 공유. `getState/recordSuccess/recordFailure/execute`가 모두 `key`를 받는 키드 API라 인스턴스 하나로 여러 회로를 동시에 관리 가능. HALF_OPEN은 영속 저장하지 않고 OPEN+resetTimeout 경과 시 읽기 시점에 가상으로 계산 — half-open 프로브가 실패하면 즉시 재-OPEN. 최초 제안서에 없던 `successThreshold`/`onStateChange` 등 옵션 동등성은 addendum 제안서로 별도 추가해 함께 반영 확인 |
 
 ## @paikpaik/kafka-forge
 
@@ -54,6 +55,15 @@ order-outbox가 `dashboard-panel-expansion`(대시보드/패널 공통 UX 확장
 스트리밍을 로컬 구현·검증한 뒤 제안 → 1.0.9로 반영 확인. api(생성/발행 이벤트)와
 fulfillment(확인 이벤트, 별도 프로세스) 양쪽에서 공식 `AdminEventsModule`로 교체해
 실시간 스트리밍이 정상 동작하는 걸 재검증했다.
+
+webhook-relay(5번째 실험)가 다중 인스턴스 delivery-worker에서 엔드포인트별 회로가
+인스턴스마다 따로 노는 문제를 로컬 `RedisCircuitBreaker`로 먼저 구현·Docker
+멀티인스턴스 재현까지 검증한 뒤 제안 → 이후 옵션 동등성(`successThreshold`/
+`onStateChange`) addendum 제안서를 추가로 작성 → 두 제안서 모두 같은 날 1.0.10으로
+반영 확인. 로컬 구현을 공식 `DistributedCircuitBreaker`(`@paikpaik/node-forge/redis`)로
+전량 교체하고(생성자가 파라미터 데코레이터 없는 plain constructor라 `useFactory` DI
+등록 필요), circuit-breaker 자체 상태 전이 테스트 6건은 이제 node-forge 책임이라
+삭제, 나머지 delivery 로직 테스트는 공식 API로 재검증해 전부 통과했다.
 
 ---
 

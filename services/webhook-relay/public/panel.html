@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>webhook-relay</title>
+<link rel="stylesheet" href="/shared/panel-ui.css" />
+<style>
+  /* 카드/버튼/폼/로그/가이드 공통 스타일은 /shared/panel-ui.css 참고.
+     여기는 webhook-relay 고유 요소(엔드포인트 목록/circuit 배지/배달 목록)만 남긴다. */
+  input[type="text"] { width: 11rem; }
+  input[type="number"] { width: 5rem; }
+
+  .token-badge { font-family: ui-monospace, monospace; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 999px; }
+  .token-badge.ok { background: #e6f4ea; color: #1a7f4b; }
+  .token-badge.none { background: #f3f4f6; color: #9ca3af; }
+
+  .endpoints, .deliveries { display: flex; flex-direction: column; gap: 0.4rem; }
+  .endpoint-row, .delivery-row {
+    display: grid; align-items: center; gap: 0.5rem; padding: 0.5rem 0.7rem;
+    border-radius: 6px; border: 1px solid #e2e5ea; font-size: 0.82rem;
+  }
+  .endpoint-row { grid-template-columns: 6rem 1fr 8rem 6rem; }
+  .delivery-row { grid-template-columns: 8rem 6rem 4rem 1fr 6rem; }
+  .endpoint-row .id, .delivery-row .id { font-family: ui-monospace, monospace; color: #6b7280; font-size: 0.72rem; }
+  .endpoint-row .detail, .delivery-row .detail { font-size: 0.75rem; color: #6b7280; }
+
+  .badge { padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 700; text-align: center; }
+  .badge.CLOSED, .badge.success { background: #e6f4ea; color: #1a7f4b; }
+  .badge.OPEN, .badge.dead { background: #fde3e1; color: #b42318; }
+  .badge.HALF_OPEN, .badge.pending { background: #fff4e0; color: #9a6400; }
+
+  .dead-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+    font-size: 0.78rem; color: #7c2d12; padding: 0.3rem 0; border-bottom: 1px dashed #f3d9c4;
+  }
+  .dead-row .msg { flex: 1; }
+  .dead-row button { flex-shrink: 0; font-size: 0.72rem; padding: 0.2rem 0.6rem; }
+</style>
+</head>
+<body>
+  <h1>webhook-relay · 웹훅 전달 플랫폼 패널</h1>
+
+  <div class="grid">
+    <div class="card">
+      <h2>테넌트</h2>
+      <div class="form-row">
+        <label>이름 <input type="text" id="tenant-name-input" value="acme"></label>
+        <button id="create-tenant-btn">테넌트 생성</button>
+        <span class="token-badge none" id="tenant-badge">테넌트 없음</span>
+      </div>
+      <p class="hint" style="margin-bottom:0">API 키는 브라우저에 저장됩니다 — 새로고침해도 유지됩니다. 실무의 서버-to-서버 API 키 인증 방식(사람 로그인 아님)입니다.</p>
+    </div>
+
+    <div class="card">
+      <h2>엔드포인트 등록</h2>
+      <div class="form-row">
+        <label>수신 시나리오 <select id="scenario-select">
+          <option value="ok">ok (정상)</option>
+          <option value="fail">fail (항상 실패)</option>
+          <option value="slow">slow (3초 지연 후 성공)</option>
+          <option value="timeout">timeout (8초 지연 — 타임아웃 유발)</option>
+        </select></label>
+        <label>이벤트 타입 <input type="text" id="event-types-input" value="order.created"></label>
+        <button class="primary" id="create-endpoint-btn">등록</button>
+      </div>
+      <p class="hint" style="margin-bottom:0">test-receiver(내장 테스트 수신 서버)의 시나리오를 골라 등록합니다. HMAC 서명 검증용 secret은 자동 생성됩니다.</p>
+      <div class="endpoints" id="endpoint-list" style="margin-top:0.6rem"></div>
+    </div>
+
+    <div class="card full">
+      <h2>이벤트 발행</h2>
+      <div class="form-row">
+        <label>타입 <input type="text" id="publish-type-input" value="order.created"></label>
+        <label>payload(JSON) <input type="text" id="publish-payload-input" value='{"orderId":"o-1"}' style="width:16rem"></label>
+        <button class="primary" id="publish-btn">발행</button>
+        <button class="danger" id="burst-btn">한 엔드포인트로 5건 연속 발사(circuit breaker 테스트)</button>
+      </div>
+      <p class="hint" id="publish-hint" style="margin-bottom:0">이벤트 타입과 일치하는(또는 "*") 활성 엔드포인트 전부로 fan-out됩니다.</p>
+      <div class="deliveries" id="delivery-list" style="margin-top:0.6rem"></div>
+    </div>
+
+    <div class="card full">
+      <h2>죽은 배달(dead) — 복구</h2>
+      <p class="hint" style="margin-top:0">최대 재시도(5회) 초과 시 더 이상 재시도되지 않습니다. "복구"를 누르면 즉시 재시도 대상으로 되돌립니다(엔드포인트가 그 사이 복구됐다면 성공합니다).</p>
+      <div class="form-row">
+        <span class="hint" style="margin:0">누적 <strong id="dead-count">0</strong>건</span>
+      </div>
+      <div id="dead-list"></div>
+    </div>
+
+    <div class="card full">
+      <h2>이벤트 로그</h2>
+      <div class="log" id="event-log"><div class="empty">아직 이벤트가 없습니다</div></div>
+    </div>
+
+    <div class="card full guide">
+      <h2>테스트 방법</h2>
+      <ol>
+        <li><strong>정상 배달</strong> — "ok" 시나리오 엔드포인트를 등록하고 이벤트를 발행하면, 몇 초 안에 배달 목록에서 <span class="badge success">success</span>로 바뀌는 걸 확인하세요. test-receiver가 HMAC 서명을 실제로 검증합니다.</li>
+        <li><strong>재시도 + 백오프</strong> — "fail" 시나리오로 등록하고 발행하면 실패가 반복되며 attempts가 늘어나고, nextAttemptAt이 지수 백오프(30초→2분→…)로 밀리는 걸 확인할 수 있습니다.</li>
+        <li><strong>circuit breaker</strong> — "한 엔드포인트로 5건 연속 발사"를 fail 엔드포인트에 누르면, 연속 실패 임계치(기본 3)를 넘는 순간부터 나머지 요청은 실제 HTTP 호출 없이 즉시 보류됩니다(엔드포인트 목록의 배지가 OPEN으로 바뀜). 여러 delivery-worker 인스턴스로 스케일해도(<code>docker compose up -d --scale delivery-worker=2</code>) 모든 인스턴스가 이 상태를 Redis로 공유합니다.</li>
+        <li><strong>죽은 배달 복구</strong> — fail 엔드포인트가 최대 재시도까지 다 실패하면 데드레터 목록에 나타납니다. "복구"를 누르면 즉시 재시도되는데, 그 사이 회로가 아직 열려있으면 재시도 자체가 보류될 수 있습니다(회로가 닫힌 뒤에 실제로 재시도됨).</li>
+        <li><strong>관측 지표</strong> — ingest의 <a href="/metrics" target="_blank" rel="noopener">/metrics</a>에서 확인 가능합니다.</li>
+      </ol>
+    </div>
+  </div>
+
+  <script src="/shared/panel-ui.js"></script>
+  <script>
+    const API_BASE = "";
+    let apiKey = localStorage.getItem("webhook-relay-api-key");
+    let tenantName = localStorage.getItem("webhook-relay-tenant-name");
+    let lastPublishedEventId = null;
+    let knownEndpoints = [];
+
+    const logEvent = PanelUI.createLogger("event-log");
+
+    PanelUI.connectSSE("/admin/logs/stream", (data) => {
+      const event = JSON.parse(data);
+      logEvent(event.message, { atIso: event.at });
+    });
+
+    function renderTenantBadge() {
+      const badge = document.getElementById("tenant-badge");
+      if (apiKey) {
+        badge.textContent = (tenantName || "테넌트") + " · " + apiKey.slice(0, 12) + "…";
+        badge.className = "token-badge ok";
+      } else {
+        badge.textContent = "테넌트 없음";
+        badge.className = "token-badge none";
+      }
+    }
+
+    async function authedFetch(path, options) {
+      options = options || {};
+      options.headers = Object.assign({}, options.headers, { "x-api-key": apiKey });
+      return fetch(API_BASE + path, options);
+    }
+
+    document.getElementById("create-tenant-btn").addEventListener("click", async () => {
+      const name = document.getElementById("tenant-name-input").value.trim() || "acme";
+      const res = await fetch("/admin/tenants", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const body = await res.json();
+      if (!res.ok) { logEvent("테넌트 생성 실패: " + JSON.stringify(body)); return; }
+      apiKey = body.data.apiKey;
+      tenantName = name;
+      localStorage.setItem("webhook-relay-api-key", apiKey);
+      localStorage.setItem("webhook-relay-tenant-name", tenantName);
+      renderTenantBadge();
+      logEvent("테넌트 생성 — " + name);
+      await refreshEndpoints();
+    });
+
+    document.getElementById("create-endpoint-btn").addEventListener("click", async () => {
+      if (!apiKey) { logEvent("먼저 테넌트를 생성하세요", true); return; }
+      const scenario = document.getElementById("scenario-select").value;
+      const eventTypes = document.getElementById("event-types-input").value.split(",").map((s) => s.trim()).filter(Boolean);
+      const secret = "sec-" + Math.random().toString(36).slice(2, 10);
+      const url = "http://test-receiver:3401/receive/" + scenario + "?secret=" + secret;
+
+      const res = await authedFetch("/endpoints", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url, secret, eventTypes }),
+      });
+      const body = await res.json();
+      if (!res.ok) { logEvent("엔드포인트 등록 실패: " + JSON.stringify(body)); return; }
+      logEvent("엔드포인트 등록 — 시나리오=" + scenario + ", 타입=" + eventTypes.join(","));
+      await refreshEndpoints();
+    });
+
+    async function refreshEndpoints() {
+      if (!apiKey) return;
+      const res = await authedFetch("/endpoints");
+      const body = await res.json();
+      knownEndpoints = body.data ?? [];
+
+      const list = document.getElementById("endpoint-list");
+      if (knownEndpoints.length === 0) {
+        list.innerHTML = '<div class="hint">아직 등록된 엔드포인트가 없습니다</div>';
+        return;
+      }
+
+      const withCircuit = await Promise.all(
+        knownEndpoints.map((ep) =>
+          fetch("/admin/endpoints/" + ep.id + "/circuit")
+            .then((r) => r.json())
+            .then((b) => ({ ...ep, circuit: b.data.state })),
+        ),
+      );
+
+      list.innerHTML = withCircuit
+        .map((ep) => {
+          const scenario = (ep.url.match(/\/receive\/(\w+)/) || [, "?"])[1];
+          return (
+            '<div class="endpoint-row"><div class="id">' + ep.id.slice(0, 8) + '…</div><div class="detail">' +
+            scenario + " · " + ep.eventTypes.join(",") + '</div><div class="badge ' + ep.circuit + '">' +
+            ep.circuit + '</div><div class="detail">' + (ep.active ? "활성" : "비활성") + "</div></div>"
+          );
+        })
+        .join("");
+    }
+
+    document.getElementById("publish-btn").addEventListener("click", async () => {
+      if (!apiKey) { logEvent("먼저 테넌트를 생성하세요", true); return; }
+      const type = document.getElementById("publish-type-input").value.trim() || "order.created";
+      let payload;
+      try {
+        payload = JSON.parse(document.getElementById("publish-payload-input").value || "{}");
+      } catch (e) {
+        logEvent("payload가 올바른 JSON이 아닙니다", true);
+        return;
+      }
+
+      const res = await authedFetch("/events", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type, payload }),
+      });
+      const body = await res.json();
+      if (!res.ok) { logEvent("이벤트 발행 실패: " + JSON.stringify(body), true); return; }
+      lastPublishedEventId = body.data.eventId;
+      logEvent("이벤트 발행 — " + type + " (구독 엔드포인트 " + body.data.deliveryIds.length + "개로 fan-out)");
+      await refreshDeliveries();
+    });
+
+    document.getElementById("burst-btn").addEventListener("click", async () => {
+      if (!apiKey) { logEvent("먼저 테넌트를 생성하세요", true); return; }
+      const type = document.getElementById("publish-type-input").value.trim() || "order.created";
+      logEvent("circuit breaker 테스트 — " + type + " 타입으로 5건 연속 발사");
+      await Promise.all(
+        Array.from({ length: 5 }, () =>
+          authedFetch("/events", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ type, payload: { burst: true } }),
+          }),
+        ),
+      );
+      await refreshDeliveries();
+      await refreshEndpoints();
+    });
+
+    async function refreshDeliveries() {
+      if (!lastPublishedEventId) return;
+      const res = await authedFetch("/events/" + lastPublishedEventId + "/deliveries");
+      const body = await res.json();
+      const deliveries = body.data ?? [];
+
+      const list = document.getElementById("delivery-list");
+      list.innerHTML = deliveries.length
+        ? deliveries
+            .map(
+              (d) =>
+                '<div class="delivery-row"><div class="id">' + d.id.slice(0, 8) + '…</div><div class="badge ' +
+                d.status + '">' + d.status + '</div><div>' + d.attempts + '회</div><div class="detail">' +
+                (d.lastError || "-") + '</div><div class="detail">' + (d.responseStatus ?? "-") + '</div></div>',
+            )
+            .join("")
+        : '<div class="hint">최근 발행한 이벤트가 없습니다</div>';
+    }
+
+    async function refreshDead() {
+      const res = await fetch("/admin/deliveries/dead");
+      const body = await res.json();
+      const data = body.data ?? { count: 0, recent: [] };
+      document.getElementById("dead-count").textContent = data.count;
+
+      const list = document.getElementById("dead-list");
+      list.innerHTML = data.recent.length
+        ? data.recent
+            .map(
+              (d) =>
+                '<div class="dead-row"><span class="msg">' + d.id.slice(0, 8) + "… — " + d.attempts + "번 실패 — " +
+                d.lastError + '</span><button data-replay-id="' + d.id + '">복구</button></div>',
+            )
+            .join("")
+        : '<div class="hint">아직 죽은 배달이 없습니다</div>';
+
+      list.querySelectorAll("button[data-replay-id]").forEach((btn) => {
+        btn.addEventListener("click", () => replayDead(btn.getAttribute("data-replay-id")));
+      });
+    }
+
+    async function replayDead(id) {
+      const res = await fetch("/admin/deliveries/" + id + "/replay", { method: "POST" });
+      const body = await res.json();
+      logEvent(res.ok ? "죽은 배달 복구함 (id " + id.slice(0, 8) + "…)" : "복구 실패: " + JSON.stringify(body));
+      await refreshDead();
+      await refreshDeliveries();
+    }
+
+    renderTenantBadge();
+    refreshEndpoints();
+    refreshDeliveries();
+    refreshDead();
+    setInterval(refreshEndpoints, 3000);
+    setInterval(refreshDeliveries, 1500);
+    setInterval(refreshDead, 3000);
+  </script>
+</body>
+</html>
