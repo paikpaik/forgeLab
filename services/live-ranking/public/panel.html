@@ -3,36 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <title>live-ranking</title>
+<link rel="stylesheet" href="/shared/panel-ui.css" />
 <style>
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; }
-  body {
-    font-family: system-ui, sans-serif;
-    margin: 0;
-    padding: 1.5rem;
-    background: #ffffff;
-    color: #1f2430;
-  }
-  h1 { font-size: 1.15rem; margin: 0 0 1rem; }
-  h2 { font-size: 0.95rem; margin: 0 0 0.75rem; color: #374151; font-weight: 700; }
-  p { line-height: 1.6; }
-
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
-  .grid > .full { grid-column: 1 / -1; }
-  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
-
-  .card { border: 1px solid #e2e5ea; border-radius: 10px; padding: 1rem 1.1rem; background: #fafbfc; }
-
-  button {
-    padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid #d1d5db;
-    background: #ffffff; color: #1f2430; cursor: pointer; font-size: 0.85rem;
-  }
-  button:hover { background: #f3f4f6; }
-  button.primary { background: #2f6feb; border-color: #2f6feb; color: #fff; }
-  button.primary:hover { background: #2660d1; }
-  button.danger { color: #b42318; border-color: #f3a6a0; }
-  button.danger:hover { background: #fef1f0; }
-
+  /* 카드/버튼/폼/로그/가이드 공통 스타일은 /shared/panel-ui.css 참고.
+     여기는 live-ranking 고유 요소(랭킹 보드/DLQ 목록)만 남긴다. */
   .my-score-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
   .my-status .big { font-size: 1.6rem; font-weight: 700; }
   .my-status .sub { color: #6b7280; font-size: 0.85rem; }
@@ -48,17 +22,8 @@
   .board-row .rank { color: #6b7280; font-weight: 700; }
   .board-row .score { text-align: right; }
 
-  .form-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
-  input[type="number"] { width: 5.5rem; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid #d1d5db; }
-  label { font-size: 0.8rem; color: #6b7280; display: flex; align-items: center; gap: 0.3rem; }
-  .hint { font-size: 0.78rem; color: #9ca3af; margin-top: 0.4rem; }
-
-  .log { font-family: ui-monospace, monospace; font-size: 0.78rem; color: #4b5563; max-height: 10rem; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 0.15rem; }
-  .log .empty { color: #9ca3af; }
-
-  .guide ol { padding-left: 1.2rem; margin: 0; }
-  .guide li { margin-bottom: 0.5rem; }
-  .guide code { background: #eef0f3; border-radius: 4px; padding: 0.05rem 0.35rem; font-size: 0.85em; }
+  /* 공통 form-row/label/hint/log/guide 폭 외 페이지 고유 폭만 여기서 지정 */
+  input[type="number"] { width: 5.5rem; }
 </style>
 </head>
 <body>
@@ -132,6 +97,7 @@
     </div>
   </div>
 
+  <script src="/shared/panel-ui.js"></script>
   <script>
     // 이 패널은 aggregator(조회 API)가 서빙하지만, 이벤트 발행은 별도 프로세스인 ingest가
     // 맡는다 — producer/consumer가 진짜 분리된 프로세스라는 걸 보여주기 위한 구조라 포트가
@@ -143,15 +109,7 @@
     let myUserId = null;
     let lastScores = new Map();
 
-    function logEvent(text) {
-      const log = document.getElementById("event-log");
-      if (log.querySelector(".empty")) log.innerHTML = "";
-      const line = document.createElement("div");
-      const time = new Date().toLocaleTimeString("ko-KR", { hour12: false });
-      line.textContent = "[" + time + "] " + text;
-      log.prepend(line);
-      while (log.children.length > 50) log.removeChild(log.lastChild);
-    }
+    const logEvent = PanelUI.createLogger("event-log");
 
     function renderMyStatus(rank, score) {
       const el = document.getElementById("my-status");
@@ -244,13 +202,13 @@
     }
 
     async function clearDlq() {
-      await fetch("/dlq", { method: "DELETE" });
+      await fetch("/admin/dlq", { method: "DELETE" });
       logEvent("DLQ 목록 지움 (실제 Kafka DLQ 토픽이 아니라 이 확인용 로그만 지워짐)");
       await refreshDlq();
     }
 
     async function refreshDlq() {
-      const res = await fetch("/dlq");
+      const res = await fetch("/admin/dlq");
       const body = await res.json();
       const data = body.data ?? { count: 0, recent: [] };
       document.getElementById("dlq-count").textContent = data.count;

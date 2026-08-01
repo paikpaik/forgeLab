@@ -3,36 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <title>waiting-room</title>
+<link rel="stylesheet" href="/shared/panel-ui.css" />
 <style>
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; }
-  body {
-    font-family: system-ui, sans-serif;
-    margin: 0;
-    padding: 1.5rem;
-    background: #ffffff;
-    color: #1f2430;
-  }
-  h1 { font-size: 1.15rem; margin: 0 0 1rem; }
-  h2 { font-size: 0.95rem; margin: 0 0 0.75rem; color: #374151; font-weight: 700; }
-  p { line-height: 1.6; }
-
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
-  .grid > .full { grid-column: 1 / -1; }
-  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
-
-  .card { border: 1px solid #e2e5ea; border-radius: 10px; padding: 1rem 1.1rem; background: #fafbfc; }
-
-  button {
-    padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid #d1d5db;
-    background: #ffffff; color: #1f2430; cursor: pointer; font-size: 0.85rem;
-  }
-  button:hover { background: #f3f4f6; }
-  button.primary { background: #2f6feb; border-color: #2f6feb; color: #fff; }
-  button.primary:hover { background: #2660d1; }
-  button.danger { color: #b42318; border-color: #f3a6a0; }
-  button.danger:hover { background: #fef1f0; }
-
+  /* 카드/버튼/폼/로그/가이드 공통 스타일은 /shared/panel-ui.css 참고.
+     여기는 waiting-room 고유 요소(내 티켓/대기열 그리드)만 남긴다. */
   .my-ticket-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
   .my-status .big { font-size: 1.6rem; font-weight: 700; }
   .my-status.admitted .big { color: #1a7f4b; }
@@ -52,17 +26,8 @@
   .ticket.mine { background: #e6f4ea; border-color: #1a7f4b; color: #1a7f4b; font-weight: 700; }
   .queue-more { display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 0.75rem; padding: 0 0.5rem; }
 
-  .form-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
-  input[type="number"] { width: 5.5rem; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid #d1d5db; }
-  label { font-size: 0.8rem; color: #6b7280; display: flex; align-items: center; gap: 0.3rem; }
-  .hint { font-size: 0.78rem; color: #9ca3af; margin-top: 0.4rem; }
-
-  .log { font-family: ui-monospace, monospace; font-size: 0.78rem; color: #4b5563; max-height: 10rem; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 0.15rem; }
-  .log .empty { color: #9ca3af; }
-
-  .guide ol { padding-left: 1.2rem; margin: 0; }
-  .guide li { margin-bottom: 0.5rem; }
-  .guide code { background: #eef0f3; border-radius: 4px; padding: 0.05rem 0.35rem; font-size: 0.85em; }
+  /* 공통 form-row/label/hint/log/guide 폭 외 페이지 고유 폭만 여기서 지정 */
+  input[type="number"] { width: 5.5rem; }
 </style>
 </head>
 <body>
@@ -115,20 +80,13 @@
     </div>
   </div>
 
+  <script src="/shared/panel-ui.js"></script>
   <script>
     const ROOM_ID = "default";
     let myUserId = null;
     let lastQueueLength = null;
 
-    function logEvent(text) {
-      const log = document.getElementById("event-log");
-      if (log.querySelector(".empty")) log.innerHTML = "";
-      const line = document.createElement("div");
-      const time = new Date().toLocaleTimeString("ko-KR", { hour12: false });
-      line.textContent = "[" + time + "] " + text;
-      log.prepend(line);
-      while (log.children.length > 50) log.removeChild(log.lastChild);
-    }
+    const logEvent = PanelUI.createLogger("event-log");
 
     function renderMyStatus(data) {
       const el = document.getElementById("my-status");
@@ -166,7 +124,7 @@
     }
 
     async function resetQueue() {
-      await fetch("/rooms/" + ROOM_ID + "/waiting-users", { method: "DELETE" });
+      await fetch("/admin/rooms/" + ROOM_ID + "/waiting-users", { method: "DELETE" });
       myUserId = null;
       lastQueueLength = null;
       renderMyStatus({});
@@ -239,7 +197,7 @@
       const log = document.getElementById("burst-log");
       log.textContent = "중지 중… 대기열에서 정리하는 중";
 
-      const res = await fetch("/rooms/" + ROOM_ID + "/waiting-users/remove", {
+      const res = await fetch("/admin/rooms/" + ROOM_ID + "/waiting-users/remove", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ userIds: state.allUserIds }),

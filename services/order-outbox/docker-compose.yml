@@ -1,7 +1,8 @@
 services:
   api:
     build:
-      context: .
+      context: ../..
+      dockerfile: services/order-outbox/Dockerfile
       secrets:
         - npm_token
     command: node dist/api/main.js
@@ -24,7 +25,8 @@ services:
 
   fulfillment:
     build:
-      context: .
+      context: ../..
+      dockerfile: services/order-outbox/Dockerfile
       secrets:
         - npm_token
     command: node dist/fulfillment/main.js

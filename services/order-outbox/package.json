@@ -17,6 +17,7 @@
     "@nestjs/core": "^10.4.0",
     "@nestjs/platform-express": "^10.4.0",
     "@nestjs/schedule": "^4.1.0",
+    "@forge-lab/panel-ui": "^0.1.0",
     "@paikpaik/kafka-forge": "^1.0.5",
     "@paikpaik/node-forge": "^1.0.4",
     "class-transformer": "^0.5.1",

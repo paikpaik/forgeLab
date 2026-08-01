@@ -6,6 +6,7 @@ import { OrderEntity } from "../entities/order.entity";
 import { OutboxRecordEntity } from "../entities/outbox-record.entity";
 import { OrderCreated } from "../shared/order-created.contract";
 import { OUTBOX_POISON_ITEM, OUTBOX_POISON_TOPIC } from "../shared/constants";
+import { AdminEventsService } from "../shared/admin-events.service";
 import { OrdersService } from "./orders.service";
 import { OrdersMetrics } from "./orders.metrics";
 
@@ -17,7 +18,7 @@ afterEach(async () => {
 
 function createService(ds: DataSource) {
   const metrics = new OrdersMetrics(new ForgeMetrics({ defaultMetrics: false }));
-  return { service: new OrdersService(ds, metrics), metrics };
+  return { service: new OrdersService(ds, metrics, new AdminEventsService()), metrics };
 }
 
 describe("OrdersService.create", () => {

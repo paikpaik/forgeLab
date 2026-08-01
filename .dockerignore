@@ -1,0 +1,16 @@
+# 빌드 컨텍스트가 레포 루트라서(dashboard-panel-expansion 1단계), Docker 데몬으로 전송되는
+# 컨텍스트 용량을 줄이기 위한 제외 목록. 각 서비스 Dockerfile은 필요한 파일만 명시적으로
+# COPY하므로, 여기서 빠진다고 빌드에 영향은 없음.
+node_modules/
+**/node_modules/
+forge/
+.git/
+.env
+.env.*
+.claude-plans/
+docs/
+proposals/
+# 주의: dist/를 여기서 통째로 제외하면 안 된다 — services/shared-panel-ui/dist는 빌드
+# 산출물이 아니라 커밋된 소스 그 자체라서(CSS/JS 트랜스파일 없음), 제외하면 컨테이너
+# 안에서 파일이 통째로 사라진다. 각 서비스의 tsc 산출물(dist)은 어차피 COPY 대상이
+# 아니라 Dockerfile 안에서 새로 빌드하므로 컨텍스트에 남아있어도 무해하다.

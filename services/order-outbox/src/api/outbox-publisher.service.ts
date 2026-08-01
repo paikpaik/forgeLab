@@ -7,6 +7,7 @@ import {
   OUTBOX_PUBLISH_BATCH_SIZE,
   OUTBOX_PUBLISH_INTERVAL_MS,
 } from "../shared/constants";
+import { AdminEventsService } from "../shared/admin-events.service";
 import { TypeormOutboxStore } from "./typeorm-outbox-store";
 
 // kafka-forge의 OutboxPublisher.publishPending()은 폴링 한 사이클만 수행하고, 스케줄러는
@@ -21,6 +22,7 @@ export class OutboxPublisherService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(KAFKA_INSTANCE) kafka: Kafka,
     private readonly store: TypeormOutboxStore,
+    private readonly adminEvents: AdminEventsService,
   ) {
     this.publisher = new OutboxPublisher(kafka, this.store, {
       idempotent: true,
@@ -41,6 +43,7 @@ export class OutboxPublisherService implements OnModuleInit, OnModuleDestroy {
     const published = await this.publisher.publishPending(OUTBOX_PUBLISH_BATCH_SIZE);
     if (published > 0) {
       this.logger.log(`outbox ${published}건 발행`);
+      this.adminEvents.emit("published", `outbox ${published}건 발행됨`);
     }
   }
 }

@@ -1,7 +1,8 @@
 services:
   app:
     build:
-      context: .
+      context: ../..
+      dockerfile: services/waiting-room/Dockerfile
       secrets:
         - npm_token
     ports:

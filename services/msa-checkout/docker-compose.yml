@@ -1,7 +1,8 @@
 services:
   gateway:
     build:
-      context: .
+      context: ../..
+      dockerfile: services/msa-checkout/Dockerfile
       secrets:
         - npm_token
     command: ["node", "dist/gateway/main.js"]
@@ -20,7 +21,8 @@ services:
 
   orchestrator:
     build:
-      context: .
+      context: ../..
+      dockerfile: services/msa-checkout/Dockerfile
       secrets:
         - npm_token
     command: ["node", "dist/orchestrator/main.js"]
@@ -46,7 +48,8 @@ services:
 
   order-service:
     build:
-      context: .
+      context: ../..
+      dockerfile: services/msa-checkout/Dockerfile
       secrets:
         - npm_token
     command: ["node", "dist/order-service/main.js"]
@@ -69,7 +72,8 @@ services:
   # Docker 내부 DNS(dns:///inventory-service:50053)로 접근하면 된다.
   inventory-service:
     build:
-      context: .
+      context: ../..
+      dockerfile: services/msa-checkout/Dockerfile
       secrets:
         - npm_token
     command: ["node", "dist/inventory-service/main.js"]

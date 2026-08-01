@@ -1,7 +1,8 @@
 services:
   ingest:
     build:
-      context: .
+      context: ../..
+      dockerfile: services/live-ranking/Dockerfile
       secrets:
         - npm_token
     command: node dist/ingest/main.js
@@ -16,7 +17,8 @@ services:
 
   aggregator:
     build:
-      context: .
+      context: ../..
+      dockerfile: services/live-ranking/Dockerfile
       secrets:
         - npm_token
     command: node dist/aggregator/main.js

@@ -8,6 +8,7 @@ import { OutboxRecordEntity } from "../entities/outbox-record.entity";
 import { OrderCreated } from "../shared/order-created.contract";
 import type { OrderCreatedPayload } from "../shared/order-created.contract";
 import { OUTBOX_POISON_ITEM, OUTBOX_POISON_TOPIC } from "../shared/constants";
+import { AdminEventsService } from "../shared/admin-events.service";
 import { OrdersMetrics } from "./orders.metrics";
 import type { CreateOrderDto } from "./dto/create-order.dto";
 
@@ -30,6 +31,7 @@ export class OrdersService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly metrics: OrdersMetrics,
+    private readonly adminEvents: AdminEventsService,
   ) {}
 
   // 주문 저장과 outbox row 저장을 하나의 DB 트랜잭션으로 묶는다 — 이게 이 실험의 핵심이다.
@@ -67,6 +69,7 @@ export class OrdersService {
     });
 
     this.metrics.ordersCreatedTotal.inc();
+    this.adminEvents.emit("created", `주문 생성 — ${dto.item} x${dto.amount} (id ${id.slice(0, 8)}…)`);
     return { id };
   }
 

@@ -17,6 +17,10 @@ async function bootstrap(): Promise<void> {
   // main.ts가 dist/aggregator/main.js로 컴파일되므로(waiting-room처럼 dist/main.js가 아니라
   // 한 단계 더 들어가 있음) public까지 두 단계 위로 올라가야 한다.
   app.useStaticAssets(join(__dirname, "..", "..", "public"));
+  // 4개 실험 패널 공유 CSS/JS — 서비스 로컬/루트 어디에 호이스팅되든 require.resolve로
+  // 실제 위치를 찾는다(waiting-room과 동일 패턴).
+  const panelUiDist = join(require.resolve("@forge-lab/panel-ui/package.json"), "..", "dist");
+  app.useStaticAssets(panelUiDist, { prefix: "/shared/" });
 
   // kafka-forge 1.0.2부터 자기 지표(kafka_forge_*, dedupedTotal 포함)를 외부 Registry에도
   // 등록해주는 registerMetricsInto가 생겨서, /metrics/kafka로 따로 노출하던 것과 직접 만든

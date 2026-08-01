@@ -6,6 +6,7 @@ import { StandardConsumer } from "@paikpaik/kafka-forge";
 import { FULFILLMENT_CONSUMER_GROUP_ID, KAFKA_INSTANCE } from "../shared/constants";
 import { OrderCreated } from "../shared/order-created.contract";
 import { OrderEntity } from "../entities/order.entity";
+import { AdminEventsService } from "../shared/admin-events.service";
 
 // 다운스트림(예: 실제였다면 배송/알림 담당 팀)이 주문 생성 이벤트를 구독해서 "처리 완료"로
 // 표시하는 역할만 시뮬레이션한다. idempotencyStore를 안 붙인 이유: order.status를
@@ -20,6 +21,7 @@ export class OrderCreatedConsumer implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(KAFKA_INSTANCE) kafka: Kafka,
     @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly adminEvents: AdminEventsService,
   ) {
     this.consumer = new StandardConsumer(kafka, FULFILLMENT_CONSUMER_GROUP_ID);
   }
@@ -30,13 +32,18 @@ export class OrderCreatedConsumer implements OnModuleInit, OnModuleDestroy {
     await this.consumer.subscribe(OrderCreated, async (payload) => {
       // confirmedAt이 이미 있으면(= 한 번 확인된 적 있으면) 갱신하지 않는다 — 재배달돼서
       // 이 핸들러가 또 실행돼도 "최초로 확인된 시각"이 재배달 시각으로 덮여쓰이지 않게.
-      await this.dataSource
+      const result = await this.dataSource
         .createQueryBuilder()
         .update(OrderEntity)
         .set({ status: "confirmed", confirmedAt: new Date().toISOString() })
         .where("id = :id", { id: payload.orderId })
         .andWhere("confirmedAt IS NULL")
         .execute();
+
+      // affected === 0이면 재배달로 이미 확인된 주문을 또 받은 것 — 로그를 또 남기지 않는다.
+      if (result.affected) {
+        this.adminEvents.emit("confirmed", `주문 확인됨 — ${payload.item} (id ${payload.orderId.slice(0, 8)}…)`);
+      }
     });
 
     await this.consumer.run();
