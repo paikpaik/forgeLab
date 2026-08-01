@@ -2,12 +2,14 @@ import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nest
 import { Interval } from "@nestjs/schedule";
 import type { Kafka } from "kafkajs";
 import { OutboxPublisher } from "@paikpaik/kafka-forge";
+import { AdminEventBus } from "@paikpaik/node-forge/events";
+import { ADMIN_EVENT_BUS } from "@paikpaik/node-forge/events/nestjs";
 import {
   KAFKA_INSTANCE,
   OUTBOX_PUBLISH_BATCH_SIZE,
   OUTBOX_PUBLISH_INTERVAL_MS,
 } from "../shared/constants";
-import { AdminEventsService } from "../shared/admin-events.service";
+import type { AdminLogEvent } from "../shared/admin-log-event";
 import { TypeormOutboxStore } from "./typeorm-outbox-store";
 
 // kafka-forge의 OutboxPublisher.publishPending()은 폴링 한 사이클만 수행하고, 스케줄러는
@@ -22,7 +24,7 @@ export class OutboxPublisherService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(KAFKA_INSTANCE) kafka: Kafka,
     private readonly store: TypeormOutboxStore,
-    private readonly adminEvents: AdminEventsService,
+    @Inject(ADMIN_EVENT_BUS) private readonly adminEvents: AdminEventBus<AdminLogEvent>,
   ) {
     this.publisher = new OutboxPublisher(kafka, this.store, {
       idempotent: true,
@@ -43,7 +45,11 @@ export class OutboxPublisherService implements OnModuleInit, OnModuleDestroy {
     const published = await this.publisher.publishPending(OUTBOX_PUBLISH_BATCH_SIZE);
     if (published > 0) {
       this.logger.log(`outbox ${published}건 발행`);
-      this.adminEvents.emit("published", `outbox ${published}건 발행됨`);
+      this.adminEvents.emit({
+        type: "published",
+        message: `outbox ${published}건 발행됨`,
+        at: new Date().toISOString(),
+      });
     }
   }
 }

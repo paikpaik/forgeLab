@@ -120,8 +120,9 @@ flowchart TB
 | DELETE | `/leaderboards/:leaderboardId` | 리더보드 초기화 (테스트/데모 전용) |
 | GET | `/health` | Redis + Kafka 브로커 연결 상태 |
 | GET | `/metrics` | node-forge 기본 지표 + `live_ranking_score_events_applied_total` + kafka-forge 소비 지표(`kafka_forge_consumed_total`, `kafka_forge_consumer_lag`, `kafka_forge_deduped_total` 등, `registerMetricsInto`로 합류) |
-| GET | `/dlq` | 재시도 소진 후 DLQ로 이동한 이벤트의 누적 건수 + 최근 목록(내용 포함) |
-| DELETE | `/dlq` | DLQ 확인용 로그 비우기 (실제 Kafka DLQ 토픽은 그대로, 이 사본만 지움 — 테스트/데모 전용) |
+| GET | `/admin/dlq` | 재시도 소진 후 DLQ로 이동한 이벤트의 누적 건수 + 최근 목록(내용 포함) — admin/test 네이밍 컨벤션 적용(기존 `/dlq`에서 이동) |
+| DELETE | `/admin/dlq` | DLQ 확인용 로그 비우기 (실제 Kafka DLQ 토픽은 그대로, 이 사본만 지움 — 테스트/데모 전용) |
+| GET | `/admin/logs/stream` | SSE — 점수 반영(applied)/DLQ 이동(dlq) 이벤트 실시간 스트림(node-forge 1.0.9 `AdminEventsModule`) |
 | GET | `/panel.html` | 실시간 랭킹 패널 UI (dashboard가 iframe으로 띄움) |
 
 ## Redis 키 스키마
@@ -264,3 +265,23 @@ dedup)도 같이 진행했다.
 목록은 비지만 누적 총량은 유지. vitest 27개 전부 통과.
 
 관련 플랜: `.claude-plans/20260717/live-ranking-event-pipeline.md` (실행 이력 포함).
+
+### 후속 (2026-08-01) — 공유 패널 UI + admin API 네이밍 통일 + SSE 로그 스트리밍(node-forge 1.0.9)
+
+`dashboard-panel-expansion` 플랜(`.claude-plans/20260801/dashboard-panel-expansion.md`) 적용:
+
+- `panel.html`의 공통 CSS/로그 렌더링을 `@forge-lab/panel-ui`로 이동
+- `DlqController`를 `/dlq` → `/admin/dlq`로 이동(admin/test 네이밍 컨벤션)
+- `RankingService.applyDelta()`(점수 반영)와 `DlqLogService.record()`(DLQ 이동)에 node-forge
+  1.0.9 `AdminEventBus`를 주입해 aggregator의 `/admin/logs/stream`으로 실시간 방송 — panel.html의
+  "N 반영됨: prev → score" 폴링 비교 휴리스틱을 제거하고 서버 진실로 교체. ingest(3100)는
+  이벤트 제출 자체가 이미 HTTP 응답으로 동기 확인되므로 SSE 대상에서 제외(aggregator만 필요)
+
+**검증(2026-08-01, 실제 컨테이너)**: 이벤트 1건 발행 → `/admin/logs/stream`에서 `applied`
+이벤트가 반영된 점수와 함께 실시간 수신. `__dlq-test__`로 실패 이벤트 발행 → 재시도 소진 후
+`dlq` 이벤트도 정상 수신. 유닛 테스트 27개 전부 통과.
+
+msa-checkout에는 SSE를 확산하지 않기로 함 — saga 전이가 orchestrator(호스트 포트 없음,
+"포트 은닉"이 의도적 설계)에서 일어나서, cross-origin SSE를 하려면 그 원칙을 깨거나 gRPC
+스트리밍을 새로 만들어야 하는데, 이미 패널 폴링(1.5초)이 실제 상태를 그대로 읽어와 큰 지연이
+없어 비용 대비 이득이 낮다고 판단(사용자 확인).

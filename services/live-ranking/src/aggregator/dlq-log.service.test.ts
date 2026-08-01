@@ -1,12 +1,14 @@
 import { describe, it, expect } from "vitest";
 import type { ForgeRedisClient } from "@paikpaik/node-forge/redis";
+import { AdminEventBus } from "@paikpaik/node-forge/events";
 import { FakeRedisClient } from "../test-utils/fake-redis-client";
 import { DLQ_LOG_LIMIT } from "../shared/constants";
 import { DlqLogService } from "./dlq-log.service";
+import type { AdminLogEvent } from "./admin-log-event";
 
 function createService() {
   const redis = new FakeRedisClient();
-  const service = new DlqLogService(redis as unknown as ForgeRedisClient);
+  const service = new DlqLogService(redis as unknown as ForgeRedisClient, new AdminEventBus<AdminLogEvent>());
   return { service };
 }
 

@@ -84,9 +84,16 @@
   <script>
     const ROOM_ID = "default";
     let myUserId = null;
-    let lastQueueLength = null;
 
     const logEvent = PanelUI.createLogger("event-log");
+
+    // 등록/입장 허용을 폴링 추정이 아니라 서버가 실제로 그 일이 일어나는 순간 SSE로
+    // 흘려보낸 걸로 로그를 채운다(node-forge 1.0.9 AdminEventsModule — order-outbox와
+    // 동일 패턴). 다른 사람의 등록/입장도 실시간으로 보인다.
+    PanelUI.connectSSE("/admin/logs/stream", (data) => {
+      const event = JSON.parse(data);
+      logEvent(event.message, { atIso: event.at });
+    });
 
     function renderMyStatus(data) {
       const el = document.getElementById("my-status");
@@ -118,15 +125,16 @@
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ userId: myUserId }),
       });
-      const body = await res.json();
-      logEvent(res.ok ? myUserId + " 등록 완료 (순번 " + body.data.position + ")" : "등록 실패: " + JSON.stringify(body));
+      if (!res.ok) {
+        const body = await res.json();
+        logEvent("등록 실패: " + JSON.stringify(body));
+      }
       await refreshMyStatus();
     }
 
     async function resetQueue() {
       await fetch("/admin/rooms/" + ROOM_ID + "/waiting-users", { method: "DELETE" });
       myUserId = null;
-      lastQueueLength = null;
       renderMyStatus({});
       logEvent("대기열 초기화");
       await refreshQueue();
@@ -143,11 +151,6 @@
       const res = await fetch("/rooms/" + ROOM_ID + "/waiting-users");
       const body = await res.json();
       const data = body.data ?? { queueLength: 0, waiting: [] };
-
-      if (lastQueueLength !== null && data.queueLength < lastQueueLength) {
-        logEvent("admission 감지: " + lastQueueLength + "명 → " + data.queueLength + "명 (" + (lastQueueLength - data.queueLength) + "명 입장 허용 추정)");
-      }
-      lastQueueLength = data.queueLength;
 
       document.getElementById("queue-count").textContent = data.queueLength;
 

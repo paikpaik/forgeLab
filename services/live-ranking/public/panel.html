@@ -107,9 +107,16 @@
     const BOT_IDS = Array.from({ length: 8 }, (_, i) => "bot-" + (i + 1));
 
     let myUserId = null;
-    let lastScores = new Map();
 
     const logEvent = PanelUI.createLogger("event-log");
+
+    // 점수 반영/DLQ 이동을 폴링 비교가 아니라 서버가 실제로 그 일이 일어나는 순간 SSE로
+    // 흘려보낸 걸로 로그를 채운다(node-forge 1.0.9 AdminEventsModule). aggregator(이 패널을
+    // 서빙하는 프로세스) 안에서 일어나는 일이라 같은 오리진.
+    PanelUI.connectSSE("/admin/logs/stream", (data) => {
+      const event = JSON.parse(data);
+      logEvent(event.message, { atIso: event.at });
+    });
 
     function renderMyStatus(rank, score) {
       const el = document.getElementById("my-status");
@@ -244,7 +251,6 @@
     async function resetBoard() {
       await fetch("/leaderboards/" + LEADERBOARD_ID, { method: "DELETE" });
       myUserId = null;
-      lastScores = new Map();
       document.getElementById("join-btn").style.display = "inline-block";
       document.getElementById("score-btn").style.display = "none";
       renderMyStatus(null, null);
@@ -264,14 +270,6 @@
       const res = await fetch("/leaderboards/" + LEADERBOARD_ID + "/top?limit=10");
       const body = await res.json();
       const entries = body.data ?? [];
-
-      for (const entry of entries) {
-        const prev = lastScores.get(entry.userId);
-        if (prev !== undefined && prev !== entry.score) {
-          logEvent(entry.userId + " 반영됨: " + prev + " → " + entry.score);
-        }
-        lastScores.set(entry.userId, entry.score);
-      }
 
       const board = document.getElementById("board");
       board.innerHTML = entries

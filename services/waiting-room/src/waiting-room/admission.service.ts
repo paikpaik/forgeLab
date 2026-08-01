@@ -1,7 +1,9 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { Interval } from "@nestjs/schedule";
 import { InjectRedis } from "@paikpaik/node-forge/redis/nestjs";
 import type { ForgeRedisClient } from "@paikpaik/node-forge/redis";
+import { AdminEventBus } from "@paikpaik/node-forge/events";
+import { ADMIN_EVENT_BUS } from "@paikpaik/node-forge/events/nestjs";
 import {
   ADMISSION_BATCH_SIZE,
   ADMISSION_INTERVAL_MS,
@@ -14,6 +16,7 @@ import {
 } from "./waiting-room.constants";
 import { TokenService } from "./token.service";
 import { WaitingRoomMetrics } from "./waiting-room.metrics";
+import type { AdminLogEvent } from "./admin-log-event";
 
 /**
  * 대기열에서 "제거"(zrem, 커밋)는 토큰 저장까지 실제로 성공한 멤버에 대해서만, 맨 마지막에
@@ -32,6 +35,7 @@ export class AdmissionService {
     @InjectRedis() private readonly redis: ForgeRedisClient,
     private readonly tokenService: TokenService,
     private readonly metrics: WaitingRoomMetrics,
+    @Inject(ADMIN_EVENT_BUS) private readonly adminEvents: AdminEventBus<AdminLogEvent>,
   ) {}
 
   @Interval(ADMISSION_INTERVAL_MS)
@@ -68,6 +72,14 @@ export class AdmissionService {
 
     const queueLength = await this.redis.zcard(key);
     this.metrics.queueLength.set({ roomId }, queueLength);
+
+    if (succeeded.length > 0) {
+      this.adminEvents.emit({
+        type: "admitted",
+        message: `입장 허용 ${succeeded.length}/${candidates.length}명 (대기열 ${queueLength}명 남음)`,
+        at: new Date().toISOString(),
+      });
+    }
 
     this.logger.log(`admitted ${succeeded.length}/${candidates.length} user(s) in room=${roomId}`);
   }

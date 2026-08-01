@@ -1,7 +1,9 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { InjectRedis } from "@paikpaik/node-forge/redis/nestjs";
 import type { ForgeRedisClient } from "@paikpaik/node-forge/redis";
 import { ForgeBizError } from "@paikpaik/node-forge/core";
+import { AdminEventBus } from "@paikpaik/node-forge/events";
+import { ADMIN_EVENT_BUS } from "@paikpaik/node-forge/events/nestjs";
 import { admissionLogKey, admittedKey, queueKey, ADMISSION_ROOM_ID } from "./waiting-room.constants";
 import { TokenService } from "./token.service";
 import type {
@@ -11,6 +13,7 @@ import type {
   WaitingStatusDto,
 } from "./dto/waiting-status.dto";
 import { WaitingRoomMetrics } from "./waiting-room.metrics";
+import type { AdminLogEvent } from "./admin-log-event";
 
 @Injectable()
 export class WaitingRoomService {
@@ -18,6 +21,7 @@ export class WaitingRoomService {
     @InjectRedis() private readonly redis: ForgeRedisClient,
     private readonly tokenService: TokenService,
     private readonly metrics: WaitingRoomMetrics,
+    @Inject(ADMIN_EVENT_BUS) private readonly adminEvents: AdminEventBus<AdminLogEvent>,
   ) {}
 
   async register(roomId: string, userId: string): Promise<RegisterResultDto> {
@@ -45,7 +49,13 @@ export class WaitingRoomService {
     ]);
     this.metrics.queueLength.set({ roomId }, queueLength);
 
-    return { position: (rank ?? 0) + 1, queueLength };
+    const position = (rank ?? 0) + 1;
+    this.adminEvents.emit({
+      type: "joined",
+      message: `${userId} 등록 완료 (순번 ${position}, 대기 ${queueLength}명)`,
+      at: new Date().toISOString(),
+    });
+    return { position, queueLength };
   }
 
   /**

@@ -17,7 +17,7 @@
     "@nestjs/platform-express": "^10.4.0",
     "@nestjs/schedule": "^4.1.0",
     "@forge-lab/panel-ui": "^0.1.0",
-    "@paikpaik/node-forge": "^1.0.3",
+    "@paikpaik/node-forge": "^1.0.9",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "ioredis": "^5.4.1",

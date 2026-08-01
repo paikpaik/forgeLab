@@ -96,7 +96,8 @@ flowchart TB
 | POST | `/orders` | 주문 생성. `{ item, amount }` — 주문 저장과 outbox 기록을 하나의 트랜잭션으로 커밋 |
 | GET | `/orders` | 최근 주문 목록. 각 항목에 `stage`(created/published/confirmed) 포함 |
 | GET | `/orders/:id` | 단건 조회 |
-| GET | `/outbox/dead` | dead-lettered outbox 레코드 목록/개수 — 발행 5회 연속 실패 시 격리된 레코드 확인용 |
+| GET | `/admin/outbox/dead` | dead-lettered outbox 레코드 목록/개수 — 발행 5회 연속 실패 시 격리된 레코드 확인용(admin/test 네이밍 컨벤션 적용, 기존 `/outbox/dead`에서 이동) |
+| GET | `/admin/logs/stream` | SSE — created/published 이벤트 실시간 스트림(node-forge 1.0.9 `AdminEventsModule`) |
 | GET | `/health` | Postgres + Kafka 연결 상태 (5초 캐싱) |
 | GET | `/metrics` | node-forge 기본 지표 + `order_outbox_orders_created_total` + kafka-forge 발행 지표 |
 | GET | `/panel.html` | 패널 UI (dashboard가 iframe으로 띄움) |
@@ -105,6 +106,7 @@ flowchart TB
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
+| GET | `/admin/logs/stream` | SSE — confirmed 이벤트 실시간 스트림(node-forge 1.0.9 `AdminEventsModule`). api와 별도 프로세스라 자기 포트에서 자기 이벤트만 방송 — panel.html이 CORS로 cross-origin 구독 |
 | GET | `/health` | Postgres + Kafka 연결 상태 |
 | GET | `/metrics` | node-forge 기본 지표 + kafka-forge 소비 지표(`kafka_forge_consumed_total`, `kafka_forge_handled_total` 등) |
 
@@ -228,3 +230,50 @@ fulfillment는 별도 비즈니스 API가 없다 — api가 같은 Postgres를 �
 테스트 데이터는 검증 후 `TRUNCATE orders, outbox_records`로 정리.
 
 관련 플랜: `.claude-plans/20260719/order-outbox-pipeline.md` (실행 이력 포함).
+
+### 후속 (2026-08-01) — 공유 패널 UI + admin API 네이밍 통일 + SSE 로그 스트리밍
+
+`dashboard-panel-expansion` 플랜(`.claude-plans/20260801/dashboard-panel-expansion.md`)의
+1~3단계를 적용:
+
+- **공유 패널 UI**: `panel.html`의 카드/버튼/폼/로그/가이드 CSS를 `@forge-lab/panel-ui`(신규
+  워크스페이스 패키지, `services/shared-panel-ui/`)로 이동. `main.ts`(api)가
+  `require.resolve("@forge-lab/panel-ui/package.json")`로 위치를 찾아 `/shared/*`로 마운트.
+  이 과정에서 Docker 빌드 컨텍스트가 서비스 디렉토리 단위였던 게 npm workspace 심볼릭 링크를
+  못 찾는 구조적 문제라는 걸 발견 — `docker-compose.yml`/`Dockerfile`을 레포 루트 빌드
+  컨텍스트로 전면 재구성(사용자 확인 후 진행, 4개 실험 전부 동일 적용)
+- **admin API 네이밍 통일**: `OutboxController`를 `/outbox` → `/admin/outbox`로 이동
+  (`rules/project/convention.md`의 Admin/Test API 네이밍 규칙 적용, `panel.html`의
+  `/outbox/dead` fetch도 `/admin/outbox/dead`로 동반 수정)
+- **SSE 로그 스트리밍**: "생성→발행→확인" 3단계를 폴링 없이 실시간으로 보여주는 파일럿을
+  api(`created`/`published`)와 fulfillment(`confirmed`, cross-origin+CORS) 양쪽에 구현
+
+이 SSE 파일럿을 만들고 나서, `AdminEventsService`(rxjs `Subject` 브로드캐스터)와
+`AdminLogsController`(`@Sse()` 래퍼) 두 파일이 order-outbox 도메인과 무관한 순수 인프라
+코드라는 걸 확인 — 나머지 3개 서비스로 그대로 복붙하기 전에
+`proposals/node-forge/20260801/20260801-admin-event-sse-stream.md` 제안서를 작성했고,
+**같은 날 node-forge 1.0.9로 반영**돼서 바로 공식 API로 교체:
+
+- `@paikpaik/node-forge/events`의 `AdminEventBus<T>` — 로컬 `AdminEventsService`와 동일한
+  rxjs `Subject` 기반이지만, `emit()`이 `(type, message)` 2개 인자가 아니라 이벤트 객체
+  1개(`emit(event: T)`)를 받는 시그니처 — 호출부(`orders.service.ts`,
+  `outbox-publisher.service.ts`, `order-created.consumer.ts`) 전부 `{ type, message, at }`
+  객체를 직접 만들어 넘기도록 수정
+- `@paikpaik/node-forge/events/nestjs`의 `AdminEventsModule.forRoot({ path })` — `ADMIN_EVENT_BUS`
+  토큰 등록 + `<path>/stream` SSE 컨트롤러를 동적으로 함께 생성. `@Controller(path)`를 클래스
+  선언이 아니라 함수 호출로 동적 적용하는 새로운 패턴이라, node-forge가 자체 smoke-test에서
+  esbuild(tsup) 번들 dist에도 데코레이터 메타데이터가 살아있는지 미리 검증해둔 걸 확인
+  (20260725 RolesGuard DI 버그와 같은 클래스의 문제를 이번엔 사전에 막음)
+- 로컬 `admin-events.service.ts`/`admin-logs.controller.ts` 삭제, `admin-log-event.ts`(payload
+  타입만 정의하는 파일)로 대체 — `OrdersModule`/`FulfillmentModule`이 각자
+  `AdminEventsModule.forRoot({ path: "admin/logs" })`를 import하는 구조로 변경
+
+**검증(2026-08-01, 실제 컨테이너 대상)**: 주문 1건 생성 → `curl -sN`으로 api(3200)와
+fulfillment(3201)의 `/admin/logs/stream`을 동시에 구독해서 `created`(api) →
+`published`(api) → `confirmed`(fulfillment) 3개 이벤트가 순서대로, 올바른 페이로드로
+도착하는 것 확인. 최초 시도에서 fulfillment 쪽이 비어 있었던 건 컨테이너 재기동 직후 Kafka
+컨슈머 그룹 리밸런스(~22초)가 안 끝난 상태에서 발행한 타이밍 문제였고, 리밸런스 완료 후
+재시도하니 정상 수신 — node-forge 1.0.9 자체 회귀는 아님. 유닛 테스트 19개 전부 통과.
+
+**잔존 작업**: SSE를 waiting-room/live-ranking/msa-checkout으로 확산은 아직 안 함(4단계
+서비스별 개별 갭과 함께 별도 요청 시 진행).

@@ -3,10 +3,12 @@ import type { Kafka } from "kafkajs";
 import { InjectDataSource } from "@paikpaik/node-forge/database/nestjs";
 import type { DataSource } from "typeorm";
 import { StandardConsumer } from "@paikpaik/kafka-forge";
+import { AdminEventBus } from "@paikpaik/node-forge/events";
+import { ADMIN_EVENT_BUS } from "@paikpaik/node-forge/events/nestjs";
 import { FULFILLMENT_CONSUMER_GROUP_ID, KAFKA_INSTANCE } from "../shared/constants";
 import { OrderCreated } from "../shared/order-created.contract";
 import { OrderEntity } from "../entities/order.entity";
-import { AdminEventsService } from "../shared/admin-events.service";
+import type { AdminLogEvent } from "../shared/admin-log-event";
 
 // 다운스트림(예: 실제였다면 배송/알림 담당 팀)이 주문 생성 이벤트를 구독해서 "처리 완료"로
 // 표시하는 역할만 시뮬레이션한다. idempotencyStore를 안 붙인 이유: order.status를
@@ -21,7 +23,7 @@ export class OrderCreatedConsumer implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(KAFKA_INSTANCE) kafka: Kafka,
     @InjectDataSource() private readonly dataSource: DataSource,
-    private readonly adminEvents: AdminEventsService,
+    @Inject(ADMIN_EVENT_BUS) private readonly adminEvents: AdminEventBus<AdminLogEvent>,
   ) {
     this.consumer = new StandardConsumer(kafka, FULFILLMENT_CONSUMER_GROUP_ID);
   }
@@ -42,7 +44,11 @@ export class OrderCreatedConsumer implements OnModuleInit, OnModuleDestroy {
 
       // affected === 0이면 재배달로 이미 확인된 주문을 또 받은 것 — 로그를 또 남기지 않는다.
       if (result.affected) {
-        this.adminEvents.emit("confirmed", `주문 확인됨 — ${payload.item} (id ${payload.orderId.slice(0, 8)}…)`);
+        this.adminEvents.emit({
+          type: "confirmed",
+          message: `주문 확인됨 — ${payload.item} (id ${payload.orderId.slice(0, 8)}…)`,
+          at: new Date().toISOString(),
+        });
       }
     });
 

@@ -21,6 +21,7 @@ forge-lab에서 `@paikpaik/node-forge`, `@paikpaik/kafka-forge`를 실 소비자
 | 1.0.6 | HIGH | 1.0.5에서 막 추가된 `auth/nestjs`의 `RolesGuard`가 생성자의 `Reflector` 타입 추론에만 의존(파라미터 데코레이터 없음)하는데, tsup(esbuild) 빌드가 `emitDecoratorMetadata`의 `design:paramtypes`를 방출하지 않아 실제 배포된 `dist`에서는 `Reflector`가 `undefined`로 주입됨 — `@Roles()`가 붙은 모든 라우트가 500. 소스 레벨 테스트로는 못 잡고 실제 설치해서 실행해야만 드러남 | `constructor(@Inject(Reflector) private readonly reflector: Reflector)`로 파라미터 데코레이터 명시. 같은 원인의 버그가 있던 `EventsExplorer`(discovery/scanner/reflector)도 함께 발견해 동일하게 수정. 스모크 테스트에 `self:paramtypes` 메타데이터 검증 + `EventsModule` 실제 부팅 테스트를 추가해 이런 종류의 버그를 CI에서 재발 방지 |
 | 1.0.7 | MEDIUM (기능 gap) | NestJS 쪽에는 요청 단위 trace ID 전파/access log 기능이 없어서(fastify에는 이미 있었음) 소비 서비스가 매번 직접 구현해야 했음 — msa-checkout에서 로컬로 구현·검증한 뒤 제안 | `core`에 `runWithRequestContext`/`getRequestContext`(AsyncLocalStorage 래퍼) 신설, `logger/nestjs`에 `TraceAccessLogMiddleware`, `grpc/nestjs`에 `buildOutgoingTraceMetadata`/`GrpcTraceAccessLogInterceptor` 추가. 크로스 엔트리 DI(1.0.2류 버그) 재발을 막기 위해 실제 앱 부팅까지 하는 스모크 테스트 포함 |
 | 1.0.8 | MEDIUM (데이터 정합성) | 1.0.7에서 막 추가된 trace 발급 로직이 새 trace를 시작할 때 `crypto.randomUUID()`를 하이픈 그대로 써서, trace를 새로 연 프로세스 자신의 로그(하이픈 포함)와 그걸 전파받은 하위 프로세스의 로그(`buildTraceparent`가 정규화한 하이픈 없는 32-hex)가 값은 같은데 문자열이 달라 "traceId로 정확 일치 grep"이 깨짐 — msa-checkout에서 gateway/orchestrator 로그를 실제로 비교해 재현 | `core`에 `generateTraceId()`(32-char hex를 하이픈 없이 직접 발급) 헬퍼 신설, `logger/nestjs`/`grpc/nestjs`/`logger/fastify`(1.0.7 이전부터 있던 코드까지) 세 곳 전부 `crypto.randomUUID()` → `generateTraceId()`로 교체 |
+| 1.0.9 | MEDIUM (기능 gap) | 프로세스 내부 이벤트를 폴링 없이 실시간으로 구독하게 해주는 기능이 없어서, order-outbox가 "생성→발행→확인" 3단계를 SSE로 실시간 스트리밍하려면 매 서비스가 rxjs `Subject` 브로드캐스터 + `@Sse()` 컨트롤러를 직접 구현해야 했음(도메인 로직과 무관한 순수 보일러플레이트) — order-outbox에서 로컬로 구현·Docker 검증한 뒤 제안 | `events` 모듈에 `AdminEventBus<T>`(rxjs `Subject` 기반 멀티캐스트 버스), `events/nestjs`에 `AdminEventsModule.forRoot({ path })`(`ADMIN_EVENT_BUS` 토큰 등록 + `<path>/stream` SSE 컨트롤러를 동적 생성) 추가. `@Controller(path)`를 클래스 선언이 아니라 함수 호출로 동적 적용하는 새 패턴이라, esbuild(tsup) 번들 dist에서도 데코레이터 메타데이터가 살아있는지(1.0.6 RolesGuard류 버그 재발 방지) 자체 smoke-test로 미리 검증해둠 |
 
 ## @paikpaik/kafka-forge
 
@@ -48,6 +49,11 @@ DI 실패)를 발견해 제안서 작성 → 1.0.6으로 즉시 수정 반영까
 새 버그(새로 발급하는 traceId가 하이픈 포함 UUID라 전파된 값과 문자열 표현이 어긋남)를
 추가로 발견해 제안서 작성 → 1.0.8로 하루 만에 수정 반영까지 확인. 실제로 gateway/orchestrator
 로그의 traceId가 문자열까지 정확히 일치하는 것을 `grep -c`로 재검증했다.
+
+order-outbox가 `dashboard-panel-expansion`(대시보드/패널 공통 UX 확장) 3단계로 SSE 로그
+스트리밍을 로컬 구현·검증한 뒤 제안 → 1.0.9로 반영 확인. api(생성/발행 이벤트)와
+fulfillment(확인 이벤트, 별도 프로세스) 양쪽에서 공식 `AdminEventsModule`로 교체해
+실시간 스트리밍이 정상 동작하는 걸 재검증했다.
 
 ---
 

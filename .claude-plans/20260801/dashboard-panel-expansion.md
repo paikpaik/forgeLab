@@ -1,5 +1,42 @@
 ## 플랜 실행 이력
 
+### 후속: 2026-08-01 — SSE 로그 스트리밍을 waiting-room/live-ranking으로 확산, msa-checkout은 제외
+
+node-forge 1.0.9 공식 API로 SSE를 나머지 서비스에 확산:
+
+- **waiting-room**: `WaitingRoomService.register()`(등록)/`AdmissionService.runAdmission()`(입장
+  허용)에 `AdminEventBus` 주입, `/admin/logs/stream`으로 방송. panel.html의 "admission 감지 추정"
+  휴리스틱과 등록 성공 낙관적 로그 제거. 실제 등록→입장 2개 이벤트 실시간 수신 확인, 유닛
+  테스트 20개 통과
+- **live-ranking**: `RankingService.applyDelta()`(점수 반영)/`DlqLogService.record()`(DLQ
+  이동)에 `AdminEventBus` 주입, aggregator의 `/admin/logs/stream`으로 방송(ingest는 제외 — 이벤트
+  제출 자체가 이미 HTTP 응답으로 동기 확인됨). panel.html의 점수 비교 휴리스틱 제거. 실제
+  반영/DLQ 이벤트 실시간 수신 확인, 유닛 테스트 27개 통과
+- **msa-checkout은 SSE 확산 대상에서 제외** — saga 전이가 orchestrator(호스트 포트 없음, "포트
+  은닉"이 의도적 설계 결정)에서 일어나서, SSE로 보여주려면 (a) gRPC 스트리밍을 새로 만들거나
+  (b) 포트 은닉 원칙을 이 케이스만 예외로 두거나 둘 중 하나가 필요한데, 이미 패널 폴링(1.5초)이
+  실제 saga 상태를 그대로 읽어와 지연이 크지 않아 비용 대비 이득이 낮다고 판단 — 사용자에게
+  세 가지 선택지를 제시했고, "이걸 할 의미가 있나?"는 반문으로 스킵 확정. 대신 5단계(saga/gRPC
+  trace 조회 뷰)가 msa-checkout에 실제로 필요한 관측성 개선이라고 정리
+
+**결과**: 4개 실험 중 3개(order-outbox/waiting-room/live-ranking)에 SSE 로그 스트리밍 적용
+완료. msa-checkout은 의도적으로 제외. 이걸로 1~3단계(공유 패널 UI/admin API 네이밍/SSE) 전부
+마무리.
+
+### 후속: 2026-08-01 — node-forge 1.0.9 채택(공식 AdminEventBus/AdminEventsModule로 교체)
+
+같은 날 작성한 `20260801-admin-event-sse-stream.md` 제안서가 node-forge 1.0.9로 반영됨
+(`events`/`events/nestjs` 모듈, `AdminEventBus<T>` + `AdminEventsModule.forRoot({ path })`).
+
+- order-outbox의 로컬 `admin-events.service.ts`/`admin-logs.controller.ts` 삭제, 공식 API로 교체
+- `emit()` 시그니처 차이(`(type, message)` 2인자 → `emit(event: T)` 1개 객체)에 맞춰
+  `orders.service.ts`/`outbox-publisher.service.ts`/`order-created.consumer.ts`/테스트 파일 수정
+- `OrdersModule`/`FulfillmentModule`이 각자 `AdminEventsModule.forRoot({ path: "admin/logs" })`를 import
+- Docker 재빌드 후 실제 주문 1건으로 재검증: `created`(api) → `published`(api) →
+  `confirmed`(fulfillment, cross-origin) 3개 이벤트가 순서대로 정상 수신. 유닛 테스트 19개
+  전부 통과. `ARCHITECTURE.md`/`docs/issues.md`(1.0.9 행 추가)에 반영
+- 나머지 3개 서비스로의 SSE 확산은 이 공식 API가 확정됐으니 이제 진행 가능 — 아직 미착수
+
 ### 완료: 2026-08-01 — 1~3단계(서비스별 개별 갭인 4단계 제외)
 
 **결과**: 성공. 1~3단계 전부 Docker로 실제 재현·검증 완료. 4단계(서비스별 개별 갭)는
@@ -60,10 +97,11 @@
   아직 안 함(아래 잔존 작업 참고).
 
 **잔존 작업**:
-- SSE 로그 스트리밍을 waiting-room/live-ranking/msa-checkout으로 확산 — 아직 안 함(사용자가
-  "서비스별 디테일한 부분은 나중에 따로 요청"하기로 해서 보류)
-- SSE 패턴(`AdminEventsService` + `AdminLogsController`)이 범용성 있다고 판단되면 node-forge
-  제안 여부를 사용자와 재확인 — 아직 진행 안 함
+- SSE 로그 스트리밍을 waiting-room/live-ranking/msa-checkout으로 확산 — **보류**. 사용자가
+  "이건 node-forge에 제안서부터 써야 하는 거 아니야?"라고 지적해서(로컬 검증 후 제안 컨벤션을
+  놓침), `proposals/node-forge/20260801/20260801-admin-event-sse-stream.md` 작성 완료.
+  `@paikpaik/node-forge/events` + `events/nestjs`(`AdminEventBus` + `AdminEventsModule.forRoot()`)
+  제안 — 나머지 3개 서비스 확산은 이 제안이 반영된 뒤, 공식 API로 진행 예정
 - 4단계(서비스별 개별 실험/테스트 갭: waiting-room 다중 인스턴스 admission 테스트, live-ranking
   크래시 재현 트리거, order-outbox 데드레터 복구 UI+API, msa-checkout trace 조회 뷰) —
   사용자 요청대로 이번 라운드에서 의도적으로 제외

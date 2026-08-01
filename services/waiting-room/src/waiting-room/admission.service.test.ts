@@ -1,17 +1,24 @@
 import { describe, it, expect, vi } from "vitest";
 import { ForgeMetrics } from "@paikpaik/node-forge/metrics";
 import type { ForgeRedisClient } from "@paikpaik/node-forge/redis";
+import { AdminEventBus } from "@paikpaik/node-forge/events";
 import { AdmissionService } from "./admission.service";
 import { WaitingRoomMetrics } from "./waiting-room.metrics";
 import { TokenService } from "./token.service";
 import { ADMISSION_ROOM_ID, admittedKey, queueKey } from "./waiting-room.constants";
 import { FakeRedisClient } from "./test-utils/fake-redis-client";
+import type { AdminLogEvent } from "./admin-log-event";
 
 function createAdmissionService() {
   const redis = new FakeRedisClient();
   const tokenService = new TokenService();
   const metrics = new WaitingRoomMetrics(new ForgeMetrics({ defaultMetrics: false }));
-  const service = new AdmissionService(redis as unknown as ForgeRedisClient, tokenService, metrics);
+  const service = new AdmissionService(
+    redis as unknown as ForgeRedisClient,
+    tokenService,
+    metrics,
+    new AdminEventBus<AdminLogEvent>(),
+  );
   return { service, redis };
 }
 

@@ -73,9 +73,10 @@ flowchart TB
 | POST | `/rooms/:roomId/waiting-users` | 대기 등록. `roomId`가 `ROOM_ID`(환경변수)와 다르면 `E9400`, 중복 등록 시 `E9409` |
 | GET | `/rooms/:roomId/waiting-users` | 큐 개요 — 전체 길이 + 앞쪽 20명 순번 |
 | GET | `/rooms/:roomId/waiting-users/:userId` | 내 상태 — waiting/admitted/expired(입장 기회를 놓침)/not_found |
-| DELETE | `/rooms/:roomId/waiting-users` | 큐 + admitted + admission-log 전체 초기화 (테스트/데모 전용) |
-| POST | `/rooms/:roomId/waiting-users/remove` | 지정한 `userIds`만 대기열에서 제거 (테스트/데모 전용). panel.html의 버스트 "중지"가 사용 — 전체를 지우는 reset과 달리 이 시뮬레이션이 등록한 사람만 취소하고 다른 등록(예: "내 티켓")은 안 건드림 |
 | POST | `/rooms/:roomId/waiting-users/verify` | 입장 토큰 검증 — 서명 + Redis 대조. 실제 서비스가 "이 유저 들어와도 되는지" 확인할 때 사용 |
+| DELETE | `/admin/rooms/:roomId/waiting-users` | 큐 + admitted + admission-log 전체 초기화 (테스트/데모 전용, admin/test 네이밍 컨벤션 적용 — 기존 `DELETE /rooms/.../waiting-users`에서 이동) |
+| POST | `/admin/rooms/:roomId/waiting-users/remove` | 지정한 `userIds`만 대기열에서 제거 (테스트/데모 전용). panel.html의 버스트 "중지"가 사용 — 전체를 지우는 reset과 달리 이 시뮬레이션이 등록한 사람만 취소하고 다른 등록(예: "내 티켓")은 안 건드림 |
+| GET | `/admin/logs/stream` | SSE — 등록(joined)/입장 허용(admitted) 이벤트 실시간 스트림(node-forge 1.0.9 `AdminEventsModule`) |
 | GET | `/health` | Redis 헬스체크 |
 | GET | `/metrics` | Prometheus 텍스트 포맷 (큐 길이, 대기시간, admission 누적) |
 
@@ -106,3 +107,20 @@ flowchart TB
 `.claude-plans/20260717/waiting-room-correctness-fixes.md`,
 `.claude-plans/20260717/waiting-room-remaining-fixes.md` (전부 실행 이력 포함).
 node-forge 관련 이슈 대응 이력은 dashboard의 **Issue** 탭 참고.
+
+### 후속 (2026-08-01) — 공유 패널 UI + admin API 네이밍 통일 + SSE 로그 스트리밍(node-forge 1.0.9)
+
+`dashboard-panel-expansion` 플랜(`.claude-plans/20260801/dashboard-panel-expansion.md`) 적용:
+
+- `panel.html`의 공통 CSS/로그 렌더링을 `@forge-lab/panel-ui`로 이동, `main.ts`가
+  `require.resolve`로 위치를 찾아 `/shared/*`로 마운트
+- `reset`/`removeUsers`를 `WaitingRoomController`에서 분리해 새 `AdminController`로,
+  경로도 `/admin/rooms/:roomId/waiting-users`(+`/remove`)로 이동
+- `WaitingRoomService.register()`(등록)와 `AdmissionService.runAdmission()`(입장 허용)에
+  node-forge 1.0.9 `AdminEventBus`를 주입해 `/admin/logs/stream`으로 실시간 방송 —
+  panel.html의 "admission 감지: N명 → M명 (추정)" 클라이언트 추정 로그와 등록 성공 시
+  낙관적 로그를 제거하고, 서버가 실제로 등록/입장 처리한 순간의 진실을 그대로 보여주도록 교체
+
+**검증(2026-08-01, 실제 컨테이너)**: 유저 1명 등록 → `curl -sN`으로 `/admin/logs/stream` 구독,
+`joined`(등록, 순번/대기인원 포함) → `admitted`(입장 허용, 5초 이내 배치 처리) 2개 이벤트가
+순서대로 정상 수신되는 것 확인. 유닛 테스트 20개 전부 통과.
