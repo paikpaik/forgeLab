@@ -3,129 +3,172 @@
 <head>
 <meta charset="utf-8" />
 <title>order-outbox</title>
+<link rel="stylesheet" href="/shared/panel-ui.css" />
 <style>
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; }
-  body {
-    font-family: system-ui, sans-serif;
-    margin: 0;
-    padding: 1.5rem;
-    background: #ffffff;
-    color: #1f2430;
+  /* 카드/버튼/폼/로그/가이드/개발자콘솔 공통 스타일은 /shared/panel-ui.css 참고.
+     메인 화면은 실제 온라인 스토어에서 주문하는 손님 페르소나만 남긴다 — 발행 실패 유발
+     같은 개발자 검증 도구는 모달로, 로그·outbox 원시 상태(dead-letter)는 개발자 콘솔로
+     옮겼다. */
+  body { padding: 0; }
+  #app-main { padding: 1.5rem; }
+
+  .app-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.9rem 1.5rem; border-bottom: 1px solid var(--panel-border);
   }
-  h1 { font-size: 1.15rem; margin: 0 0 1rem; }
-  h2 { font-size: 0.95rem; margin: 0 0 0.75rem; color: #374151; font-weight: 700; }
-  p { line-height: 1.6; }
-
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
-  .grid > .full { grid-column: 1 / -1; }
-  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
-
-  .card { border: 1px solid #e2e5ea; border-radius: 10px; padding: 1rem 1.1rem; background: #fafbfc; }
-
-  button {
-    padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid #d1d5db;
-    background: #ffffff; color: #1f2430; cursor: pointer; font-size: 0.85rem;
+  .app-brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; font-size: 1rem; }
+  .app-logo { font-size: 1.3rem; }
+  .app-header-right { display: flex; align-items: center; gap: 0.7rem; }
+  .order-chip {
+    font-size: 0.78rem; padding: 0.3rem 0.7rem; border-radius: 999px;
+    background: var(--panel-card-bg); border: 1px solid var(--panel-border); color: var(--panel-muted);
   }
-  button:hover { background: #f3f4f6; }
-  button.primary { background: #2f6feb; border-color: #2f6feb; color: #fff; }
-  button.primary:hover { background: #2660d1; }
+  .tools-link { font-size: 0.78rem; color: var(--panel-muted); }
 
-  .form-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
-  input[type="text"], input[type="number"] { padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid #d1d5db; }
   input[type="text"] { width: 10rem; }
   input[type="number"] { width: 6rem; }
-  label { font-size: 0.8rem; color: #6b7280; display: flex; align-items: center; gap: 0.3rem; }
-  .hint { font-size: 0.78rem; color: #9ca3af; margin-top: 0.4rem; }
+
+  .last-order {
+    border: 2px dashed var(--panel-input-border); border-radius: 10px; padding: 1rem 1.2rem;
+    text-align: center; max-width: 24rem; margin: 1rem auto 0;
+  }
+  .last-order .sub { color: var(--panel-muted); font-size: 0.85rem; }
+  .last-order a { display: inline-block; margin-top: 0.5rem; }
 
   .orders { display: flex; flex-direction: column; gap: 0.4rem; }
   .order-row {
-    display: grid; grid-template-columns: 1fr 5rem 6rem 9rem; align-items: center;
-    gap: 0.5rem; padding: 0.5rem 0.7rem; border-radius: 6px; border: 1px solid #e2e5ea;
+    display: grid; grid-template-columns: 1fr 5rem 6rem 5rem; align-items: center;
+    gap: 0.5rem; padding: 0.5rem 0.7rem; border-radius: 6px; border: 1px solid var(--panel-border);
     font-size: 0.85rem;
   }
-  .order-row .id { font-family: ui-monospace, monospace; color: #6b7280; font-size: 0.75rem; }
   .order-row .amount { text-align: right; }
+  .order-row a { font-size: 0.78rem; text-align: right; }
 
   .stage { padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; text-align: center; }
   .stage.created { background: #f3f4f6; color: #6b7280; }
   .stage.published { background: #fff4e0; color: #9a6400; }
   .stage.confirmed { background: #e6f4ea; color: #1a7f4b; }
 
-  .log { font-family: ui-monospace, monospace; font-size: 0.78rem; color: #4b5563; max-height: 10rem; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 0.15rem; }
-  .log .empty { color: #9ca3af; }
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 900;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px;
+    padding: 1.25rem 1.4rem; width: min(26rem, 90vw); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  }
+  .modal h3 { margin: 0 0 0.9rem; font-size: 1rem; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.7rem; }
 
-  button.danger { color: #b42318; border-color: #f3a6a0; }
-  button.danger:hover { background: #fef1f0; }
-  .dead-row { font-size: 0.78rem; color: #7c2d12; padding: 0.3rem 0; border-bottom: 1px dashed #f3d9c4; }
-
-  .guide ol { padding-left: 1.2rem; margin: 0; }
-  .guide li { margin-bottom: 0.5rem; }
-  .guide code { background: #eef0f3; border-radius: 4px; padding: 0.05rem 0.35rem; font-size: 0.85em; }
+  /* 개발자 콘솔 "Outbox 상태" 탭 */
+  .dead-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+    font-size: 0.78rem; color: #7c2d12; padding: 0.3rem 0; border-bottom: 1px dashed #f3d9c4;
+  }
+  .dead-row .msg { flex: 1; }
+  .dead-row button { flex-shrink: 0; font-size: 0.72rem; padding: 0.2rem 0.6rem; }
 </style>
 </head>
 <body>
-  <h1>order-outbox · 트랜잭셔널 아웃박스 패널</h1>
+  <header class="app-header">
+    <div class="app-brand"><span class="app-logo">🛒</span><span class="app-name">온라인 스토어</span></div>
+    <div class="app-header-right">
+      <span class="order-chip" id="order-chip">주문 -건</span>
+      <a href="#" class="tools-link" id="open-tools-btn">테스트 도구</a>
+    </div>
+  </header>
 
-  <div class="grid">
-    <div class="card full">
+  <main id="app-main">
+    <section class="card full">
       <h2>주문하기</h2>
-      <div class="form-row">
+      <div class="form-row" style="justify-content:center">
         <label>상품명 <input type="text" id="item-input" value="키보드"></label>
         <label>수량 <input type="number" id="amount-input" value="1" min="1" max="1000000"></label>
         <button class="primary" id="order-btn">주문 생성</button>
       </div>
-      <p class="hint" style="margin-bottom:0">주문 저장과 outbox 기록은 하나의 DB 트랜잭션으로 같이 커밋됩니다. 그 뒤 "발행됨"으로 바뀌는 건 outbox 폴러가 몇 초마다 Kafka로 발행한 다음이고, "확인됨"으로 바뀌는 건 별도 프로세스(fulfillment)가 그 이벤트를 소비한 다음입니다 — 두 단계 지연을 순서대로 확인해보세요.</p>
-    </div>
-
-    <div class="card full">
-      <h2>주문 목록</h2>
-      <div class="orders" id="orders"></div>
-    </div>
-
-    <div class="card full">
-      <h2>죽은 outbox 레코드 (dead-lettered)</h2>
-      <p class="hint" style="margin-top:0">발행이 계속 실패하는 레코드는 5번 재시도 후 격리돼서 더 이상 재시도되지 않습니다(재시도 무한 반복으로 다른 정상 레코드를 막지 않게). "발행 실패 유발"을 누르면 일부러 유효하지 않은 토픽으로 주문 하나를 만들어서 이 흐름을 직접 확인할 수 있습니다 — 몇 초 뒤 이 목록에 나타납니다.</p>
-      <div class="form-row">
-        <button class="danger" id="poison-btn">발행 실패 유발</button>
-        <span class="hint" style="margin:0">누적 <strong id="dead-count">0</strong>건</span>
+      <div class="last-order" id="last-order" style="display:none">
+        <div class="sub">주문이 접수됐습니다</div>
+        <a class="primary" id="last-order-link" target="_blank" rel="noopener" style="text-decoration:none;padding:0.4rem 0.9rem;border-radius:6px;">주문 조회하기 →</a>
       </div>
-      <div id="dead-list"></div>
-    </div>
+      <p class="hint" style="margin-bottom:0;text-align:center">
+        주문 저장과 outbox 기록은 하나의 DB 트랜잭션으로 같이 커밋됩니다. "발행됨"은 outbox
+        폴러가 Kafka로 발행한 다음, "확인됨"은 별도 프로세스(fulfillment)가 그 이벤트를
+        소비한 다음입니다 — 주문 조회 페이지에서 이 단계 전이를 실시간으로 볼 수 있습니다.
+      </p>
+    </section>
 
-    <div class="card full">
-      <h2>이벤트 로그</h2>
-      <div class="log" id="event-log"><div class="empty">아직 이벤트가 없습니다</div></div>
-    </div>
+    <section class="card full">
+      <h2>최근 주문</h2>
+      <div class="orders" id="orders"></div>
+    </section>
 
-    <div class="card full guide">
-      <h2>테스트 방법</h2>
+    <section class="card full guide">
+      <h2>둘러보기</h2>
       <ol>
-        <li><strong>3단계 지연 확인</strong> — "주문 생성"을 누르면 목록에 <span class="stage created">생성됨</span>으로 바로 나타납니다. 몇 초 뒤 outbox 폴러(기본 5초 주기)가 발행하면 <span class="stage published">발행됨</span>으로 바뀌고, fulfillment 컨슈머가 반영하면 <span class="stage confirmed">확인됨</span>으로 바뀝니다. "발행됨"은 발행-소비가 폴링 주기보다 빠르게 끝나면 목록 배지로는 못 보고 지나칠 수 있는데, 이벤트 로그는 서버가 내려주는 실제 시각으로 재구성해서 두 전이 모두 놓치지 않고 보여줍니다.</li>
-        <li><strong>원자성 확인</strong> — 주문 저장과 outbox 기록이 같은 트랜잭션이라, "생성됨" 상태로 목록에 뜬 주문은 반드시 언젠가 발행됩니다(둘 중 하나만 성공하는 경우가 없음).</li>
-        <li><strong>발행 실패 격리 확인</strong> — "발행 실패 유발"을 누르면 일부러 실패하는 주문을 하나 만듭니다. 재시도 5번(약 20~25초) 동안은 계속 시도되다가, 그 이후엔 "죽은 레코드" 목록으로 격리돼서 더 이상 재시도되지 않습니다 — 그 사이에 다른 정상 주문을 생성해보면, 죽은 레코드 하나가 나머지 주문의 발행을 막지 않는다는 것도 확인할 수 있습니다.</li>
-        <li><strong>관측 지표</strong> — api의 <a href="/metrics" target="_blank" rel="noopener">/metrics</a>에서 생성 건수(<code>order_outbox_orders_created_total</code>), 발행 지표(<code>kafka_forge_produced_total</code>)를 확인할 수 있습니다. fulfillment의 <code>:3201/metrics</code>에서는 소비 지표(<code>kafka_forge_consumed_total</code>)를 볼 수 있습니다.</li>
+        <li><strong>3단계 지연 확인</strong> — "주문 생성"을 누르면 목록에 <span class="stage created">생성됨</span>으로
+          바로 나타납니다. 몇 초 뒤 outbox 폴러(기본 5초 주기)가 발행하면
+          <span class="stage published">발행됨</span>으로, fulfillment 컨슈머가 반영하면
+          <span class="stage confirmed">확인됨</span>으로 바뀝니다.</li>
+        <li><strong>주문 조회</strong> — "주문 조회하기"를 누르면 이 트랜잭셔널 아웃박스가
+          실제로 이어지는 곳(실제 쇼핑몰 스타일 주문 조회/배송 추적 페이지)을 별도 창으로
+          볼 수 있습니다.</li>
+        <li><strong>발행 실패/복구</strong> — 우측 상단 "테스트 도구"에서 일부러 실패하는
+          주문을 만들어서, 재시도 5회 후 dead-letter로 격리되는 것과 개발자 콘솔에서 복구하는
+          것까지 확인할 수 있습니다.</li>
+        <li><strong>개발자 콘솔</strong> — 우측 하단 버튼에서 실시간 로그(api+fulfillment 둘
+          다)와 Outbox 원시 상태(dead-letter 목록+복구)를 확인할 수 있습니다. 지표는 api의
+          <a href="/metrics" target="_blank" rel="noopener">/metrics</a>, fulfillment의
+          <code>:3201/metrics</code>에서 확인하세요.</li>
       </ol>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="tools-modal" hidden>
+    <div class="modal">
+      <h3>테스트 도구</h3>
+      <p class="hint" style="margin-top:0">
+        일부러 유효하지 않은 토픽으로 주문을 하나 만듭니다. 재시도 5번(약 20~25초) 후 개발자
+        콘솔의 "Outbox 상태" 탭에 죽은 레코드로 나타납니다.
+      </p>
+      <div class="modal-actions">
+        <button class="danger" id="poison-btn">발행 실패 유발</button>
+      </div>
     </div>
   </div>
 
+  <script src="/shared/panel-ui.js"></script>
   <script>
     const STAGE_LABEL = { created: "생성됨", published: "발행됨", confirmed: "확인됨" };
-    // "지금 상태가 뭐냐"가 아니라 "이 전이가 실제로 언제 일어났는지"를 서버가 내려주는
-    // publishedAt/confirmedAt으로 기록한다 — 폴링(1초)이 그 순간을 못 잡아도(카프카 발행→소비가
-    // 훨씬 빠르게 끝나버려서), 나중에 폴링했을 때 실제 시각으로 로그를 정확히 재구성할 수 있다.
-    // 전이마다 한 번만 기록하기 위해 이미 로그로 남긴 전이를 추적한다.
-    const loggedTransitions = new Set();
+    // 정상 흐름과 무관한 테스트/데모 전용 트리거 — 서버(shared/constants.ts)의
+    // OUTBOX_POISON_ITEM과 문자열을 맞춰둔다.
+    const OUTBOX_POISON_ITEM = "__outbox-fail__";
 
-    function logEvent(text, atIso) {
-      const log = document.getElementById("event-log");
-      if (log.querySelector(".empty")) log.innerHTML = "";
-      const line = document.createElement("div");
-      const time = (atIso ? new Date(atIso) : new Date()).toLocaleTimeString("ko-KR", { hour12: false });
-      line.textContent = "[" + time + "] " + text;
-      log.prepend(line);
-      while (log.children.length > 50) log.removeChild(log.lastChild);
-    }
+    function openModal(id) { document.getElementById(id).hidden = false; }
+    function closeModal(id) { document.getElementById(id).hidden = true; }
+    document.querySelectorAll(".modal-backdrop").forEach((backdrop) => {
+      backdrop.addEventListener("click", (event) => { if (event.target === backdrop) closeModal(backdrop.id); });
+    });
+    document.getElementById("open-tools-btn").addEventListener("click", (event) => {
+      event.preventDefault();
+      openModal("tools-modal");
+    });
+
+    // created/published는 api(3200, 같은 오리진)에서, confirmed는 fulfillment(3201,
+    // cross-origin)에서 온다 — 두 프로세스가 진짜 분리돼 있어서 각자 아는 것만 보낸다.
+    const devConsole = PanelUI.mountDevConsole({
+      streamUrl: "/admin/logs/stream",
+      title: "개발자 콘솔",
+      logLabel: "로그",
+      tabs: [{ id: "outbox", label: "Outbox 상태", pollMs: 3000, render: renderOutboxTab }],
+    });
+    // fulfillment(3201, cross-origin)의 SSE는 mountDevConsole이 만든 로거(devConsole.log)를
+    // 그대로 재사용해 같은 "로그" 탭에 합친다 — api/fulfillment가 진짜 분리된 프로세스라
+    // 각자 아는 것만 보내는 걸 한 화면에서 시간순으로 함께 본다.
+    PanelUI.connectSSE("http://localhost:3201/admin/logs/stream", (data) => {
+      const event = JSON.parse(data);
+      devConsole.log(event.message, { atIso: event.at });
+    });
 
     async function createOrder() {
       const item = document.getElementById("item-input").value.trim() || "상품";
@@ -136,10 +179,9 @@
         body: JSON.stringify({ item, amount }),
       });
       const body = await res.json();
-      if (res.ok) {
-        logEvent("주문 생성 — " + item + " x" + amount + " (id " + body.data.id.slice(0, 8) + "…)");
-      } else {
-        logEvent("주문 생성 실패: " + JSON.stringify(body));
+      if (res.ok && body.data) {
+        document.getElementById("last-order").style.display = "block";
+        document.getElementById("last-order-link").href = "/order-status.html?orderId=" + body.data.id;
       }
       await refreshOrders();
     }
@@ -149,21 +191,7 @@
       const body = await res.json();
       const orders = body.data ?? [];
 
-      for (const order of orders) {
-        const label = order.item + "(" + order.id.slice(0, 8) + "…)";
-
-        const publishedKey = order.id + ":published";
-        if (order.publishedAt && !loggedTransitions.has(publishedKey)) {
-          logEvent(label + " " + STAGE_LABEL.created + " → " + STAGE_LABEL.published, order.publishedAt);
-          loggedTransitions.add(publishedKey);
-        }
-
-        const confirmedKey = order.id + ":confirmed";
-        if (order.confirmedAt && !loggedTransitions.has(confirmedKey)) {
-          logEvent(label + " " + STAGE_LABEL.published + " → " + STAGE_LABEL.confirmed, order.confirmedAt);
-          loggedTransitions.add(confirmedKey);
-        }
-      }
+      document.getElementById("order-chip").textContent = "주문 " + orders.length + "건";
 
       const list = document.getElementById("orders");
       list.innerHTML = orders.length
@@ -172,57 +200,58 @@
               (order) =>
                 '<div class="order-row"><div>' + order.item + '</div><div class="amount">' +
                 order.amount + '개</div><div class="stage ' + order.stage + '">' + STAGE_LABEL[order.stage] +
-                '</div><div class="id">' + order.id.slice(0, 8) + "…</div></div>",
+                '</div><a href="/order-status.html?orderId=' + order.id + '" target="_blank" rel="noopener">조회</a></div>',
             )
             .join("")
         : '<div class="hint">아직 주문이 없습니다</div>';
     }
 
-    // 정상 흐름과 무관한 테스트/데모 전용 트리거 — 서버(shared/constants.ts)의
-    // OUTBOX_POISON_ITEM과 문자열을 맞춰둔다. 이 상품명으로 주문하면 OrdersService가 일부러
-    // 유효하지 않은 토픽으로 outbox row를 만들어서, 재시도 5번 후 dead-lettering되는 걸
-    // raw SQL 없이 눈으로 확인할 수 있다.
-    const OUTBOX_POISON_ITEM = "__outbox-fail__";
-
     async function triggerPoison() {
-      const res = await fetch("/orders", {
+      await fetch("/orders", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ item: OUTBOX_POISON_ITEM, amount: 1 }),
       });
-      const body = await res.json();
-      logEvent(
-        "발행 실패 유발 — 주문 하나를 일부러 실패하는 토픽으로 생성함 (id " +
-          (body.data ? body.data.id.slice(0, 8) : "?") + "…). 재시도 5번(약 20~25초) 후 죽은 레코드 목록에 나타납니다.",
-      );
+      closeModal("tools-modal");
       await refreshOrders();
     }
 
-    async function refreshDead() {
-      const res = await fetch("/outbox/dead");
+    // 개발자 콘솔 "Outbox 상태" 탭 — 발행이 계속 실패해 격리된(dead-lettered) 레코드가
+    // 조용히 사라지지 않고 눈에 보이게 한다. "복구"는 이 데모의 유일한 실패 원인(poison
+    // topic)을 서버가 정상 토픽으로 고친 뒤 되살린다.
+    async function renderOutboxTab(container) {
+      const res = await fetch("/admin/outbox/dead");
       const body = await res.json();
       const data = body.data ?? { count: 0, recent: [] };
-      document.getElementById("dead-count").textContent = data.count;
 
-      const list = document.getElementById("dead-list");
-      list.innerHTML = data.recent.length
-        ? data.recent
-            .map(
-              (rec) =>
-                '<div class="dead-row">' + rec.key.slice(0, 8) + "… — " + rec.attempts + "번 실패 — " +
-                rec.lastError + "</div>",
-            )
-            .join("")
-        : '<div class="hint">아직 죽은 레코드가 없습니다</div>';
+      container.innerHTML =
+        '<div class="hint" style="margin-top:0">누적 죽은 레코드 <strong>' + data.count + "</strong>건</div>" +
+        (data.recent.length
+          ? data.recent
+              .map(
+                (rec) =>
+                  '<div class="dead-row"><span class="msg">' + rec.key.slice(0, 8) + "… — " + rec.attempts + "번 실패 — " +
+                  rec.lastError + '</span><button data-revive-id="' + rec.id + '">복구</button></div>',
+              )
+              .join("")
+          : '<div class="hint">아직 죽은 레코드가 없습니다</div>');
+
+      container.querySelectorAll("button[data-revive-id]").forEach((btn) => {
+        btn.addEventListener("click", () => reviveDead(btn.getAttribute("data-revive-id"), container));
+      });
+    }
+
+    async function reviveDead(id, container) {
+      await fetch("/admin/outbox/dead/" + id + "/revive", { method: "POST" });
+      await renderOutboxTab(container);
+      await refreshOrders();
     }
 
     document.getElementById("order-btn").addEventListener("click", createOrder);
     document.getElementById("poison-btn").addEventListener("click", triggerPoison);
 
     refreshOrders();
-    refreshDead();
     setInterval(refreshOrders, 1000);
-    setInterval(refreshDead, 3000);
   </script>
 </body>
 </html>

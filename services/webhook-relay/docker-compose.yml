@@ -1,0 +1,103 @@
+services:
+  ingest:
+    build:
+      context: ../..
+      dockerfile: services/webhook-relay/Dockerfile
+      secrets:
+        - npm_token
+    command: node dist/ingest/main.js
+    restart: unless-stopped
+    ports:
+      - "${INGEST_PORT:-3400}:3400"
+    environment:
+      PORT: 3400
+      KAFKA_BROKERS: redpanda:9092
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: webhook_relay
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OUTBOX_PUBLISH_INTERVAL_MS: 2000
+      OUTBOX_PUBLISH_BATCH_SIZE: 50
+    depends_on:
+      - redpanda
+      - postgres
+      - redis
+
+  # 다중 인스턴스 분산 circuit breaker 검증 대상 — 호스트 포트를 노출하지 않는다
+  # (msa-checkout의 inventory-service와 동일한 이유: --scale로 여러 인스턴스를 띄우면
+  # 고정 호스트 포트 매핑이 애초에 불가능하고, 어차피 외부에서 직접 부를 API가 없다).
+  delivery-worker:
+    build:
+      context: ../..
+      dockerfile: services/webhook-relay/Dockerfile
+      secrets:
+        - npm_token
+    command: node dist/delivery-worker/main.js
+    restart: unless-stopped
+    environment:
+      PORT: 3450
+      KAFKA_BROKERS: redpanda:9092
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: webhook_relay
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      RETRY_POLL_INTERVAL_MS: 5000
+      CIRCUIT_FAILURE_THRESHOLD: 3
+      CIRCUIT_RESET_TIMEOUT_MS: 20000
+      MAX_DELIVERY_ATTEMPTS: 5
+    depends_on:
+      - redpanda
+      - postgres
+      - redis
+
+  test-receiver:
+    build:
+      context: ../..
+      dockerfile: services/webhook-relay/Dockerfile
+      secrets:
+        - npm_token
+    command: node dist/test-receiver/main.js
+    restart: unless-stopped
+    ports:
+      - "${TEST_RECEIVER_PORT:-3401}:3401"
+    environment:
+      PORT: 3401
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: webhook_relay
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:29094
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:29094
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=info
+    restart: unless-stopped
+    ports:
+      # 카프카 프로토콜(호스트 디버깅용) — live-ranking(29092)/order-outbox(29093)와 안 겹치게 분리
+      - "29094:29094"
+
+secrets:
+  npm_token:
+    environment: NODE_AUTH_TOKEN

@@ -2,6 +2,7 @@ import { Controller, UseInterceptors } from "@nestjs/common";
 import { GrpcMethod } from "@nestjs/microservices";
 import { GrpcTraceAccessLogInterceptor } from "@paikpaik/node-forge/grpc/nestjs";
 import { SagaService } from "./saga.service";
+import { TraceRecorderService, withSpan } from "../shared/trace-recorder";
 
 interface StartCheckoutRequest {
   userId: string;
@@ -16,12 +17,17 @@ interface GetSagaStatusRequest {
 @Controller()
 @UseInterceptors(GrpcTraceAccessLogInterceptor)
 export class SagaController {
-  constructor(private readonly sagaService: SagaService) {}
+  constructor(
+    private readonly sagaService: SagaService,
+    private readonly traceRecorder: TraceRecorderService,
+  ) {}
 
   @GrpcMethod("CheckoutSagaService", "StartCheckout")
   async startCheckout(request: StartCheckoutRequest) {
-    const sagaId = await this.sagaService.startCheckout(request.userId, request.productId, request.quantity);
-    return { sagaId };
+    return withSpan(this.traceRecorder, "orchestrator", "StartCheckout", async () => {
+      const sagaId = await this.sagaService.startCheckout(request.userId, request.productId, request.quantity);
+      return { sagaId };
+    });
   }
 
   @GrpcMethod("CheckoutSagaService", "GetSagaStatus")
@@ -39,6 +45,7 @@ export class SagaController {
       lastError: view.lastError ?? "",
       createdAt: view.createdAt,
       updatedAt: view.updatedAt,
+      traceId: view.traceId ?? "",
     };
   }
 }

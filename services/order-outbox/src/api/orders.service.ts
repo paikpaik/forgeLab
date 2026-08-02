@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { InjectDataSource } from "@paikpaik/node-forge/database/nestjs";
 import type { DataSource } from "typeorm";
 import { In } from "typeorm";
+import { AdminEventBus } from "@paikpaik/node-forge/events";
+import { ADMIN_EVENT_BUS } from "@paikpaik/node-forge/events/nestjs";
 import { OrderEntity } from "../entities/order.entity";
 import { OutboxRecordEntity } from "../entities/outbox-record.entity";
 import { OrderCreated } from "../shared/order-created.contract";
 import type { OrderCreatedPayload } from "../shared/order-created.contract";
 import { OUTBOX_POISON_ITEM, OUTBOX_POISON_TOPIC } from "../shared/constants";
+import type { AdminLogEvent } from "../shared/admin-log-event";
 import { OrdersMetrics } from "./orders.metrics";
 import type { CreateOrderDto } from "./dto/create-order.dto";
 
@@ -30,6 +33,7 @@ export class OrdersService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly metrics: OrdersMetrics,
+    @Inject(ADMIN_EVENT_BUS) private readonly adminEvents: AdminEventBus<AdminLogEvent>,
   ) {}
 
   // 주문 저장과 outbox row 저장을 하나의 DB 트랜잭션으로 묶는다 — 이게 이 실험의 핵심이다.
@@ -67,6 +71,11 @@ export class OrdersService {
     });
 
     this.metrics.ordersCreatedTotal.inc();
+    this.adminEvents.emit({
+      type: "created",
+      message: `주문 생성 — ${dto.item} x${dto.amount} (id ${id.slice(0, 8)}…)`,
+      at: new Date().toISOString(),
+    });
     return { id };
   }
 

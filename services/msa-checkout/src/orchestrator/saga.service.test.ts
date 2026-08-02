@@ -5,6 +5,7 @@ import { FakeOrderClient } from "../test-utils/fake-order-client";
 import { FakeInventoryClient } from "../test-utils/fake-inventory-client";
 import { SagaInstanceEntity } from "./entities/saga-instance.entity";
 import { SagaService } from "./saga.service";
+import type { TraceRecorderService } from "../shared/trace-recorder";
 
 let dataSource: DataSource;
 
@@ -12,11 +13,17 @@ afterEach(async () => {
   if (dataSource?.isInitialized) await dataSource.destroy();
 });
 
+// driveStep()이 트레이스 스팬을 기록하지만, 이 테스트들의 관심사는 saga TCC 전이 로직이지
+// 트레이스 자체가 아니다 — 실제 Redis 없이 recordSpan만 no-op으로 흉내낸다.
+function createFakeTraceRecorder(): TraceRecorderService {
+  return { recordSpan: async () => {}, getSpans: async () => [] } as unknown as TraceRecorderService;
+}
+
 async function setup() {
   dataSource = await createTestDataSource([SagaInstanceEntity]);
   const orderClient = new FakeOrderClient();
   const inventoryClient = new FakeInventoryClient();
-  const service = new SagaService(dataSource, orderClient, inventoryClient);
+  const service = new SagaService(dataSource, orderClient, inventoryClient, createFakeTraceRecorder());
   return { service, orderClient, inventoryClient };
 }
 

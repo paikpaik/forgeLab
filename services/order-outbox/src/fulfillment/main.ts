@@ -11,6 +11,11 @@ import { FulfillmentAppModule } from "./app.module";
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(FulfillmentAppModule, { bufferLogs: true });
 
+  // panel.html은 api(3200)가 서빙하지만, /admin/logs/stream(confirmed 이벤트)은 fulfillment
+  // 자신의 포트(3201)에서만 나온다 — live-ranking의 ingest/aggregator와 같은 이유로 CORS가
+  // 필요하다(브라우저 입장에서 cross-origin 요청).
+  app.enableCors();
+
   registerMetricsInto(app.get<ForgeMetrics>(METRICS_INSTANCE).registry);
 
   app.useLogger(app.get(ForgeLoggerService));

@@ -1,7 +1,10 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { InjectRedis } from "@paikpaik/node-forge/redis/nestjs";
 import type { ForgeRedisClient } from "@paikpaik/node-forge/redis";
+import { AdminEventBus } from "@paikpaik/node-forge/events";
+import { ADMIN_EVENT_BUS } from "@paikpaik/node-forge/events/nestjs";
 import { DLQ_LOG_KEY, DLQ_LOG_LIMIT, DLQ_TOTAL_KEY } from "../shared/constants";
+import type { AdminLogEvent } from "./admin-log-event";
 
 export interface DlqLogEntry {
   userId: string;
@@ -22,7 +25,10 @@ export interface DlqOverview {
 // 로그로 옮겨 담는다(진짜 큐/재처리 대상이 아니라 "확인용" 사본).
 @Injectable()
 export class DlqLogService {
-  constructor(@InjectRedis() private readonly redis: ForgeRedisClient) {}
+  constructor(
+    @InjectRedis() private readonly redis: ForgeRedisClient,
+    @Inject(ADMIN_EVENT_BUS) private readonly adminEvents: AdminEventBus<AdminLogEvent>,
+  ) {}
 
   async record(entry: DlqLogEntry): Promise<void> {
     // 누적 총량은 별도 카운터로 잰다 — 아래 ltrim으로 리스트 자체는 최근 N건만 남기기
@@ -31,6 +37,11 @@ export class DlqLogService {
     await this.redis.incr(DLQ_TOTAL_KEY);
     await this.redis.lpush(DLQ_LOG_KEY, entry);
     await this.redis.ltrim(DLQ_LOG_KEY, 0, DLQ_LOG_LIMIT - 1);
+    this.adminEvents.emit({
+      type: "dlq",
+      message: `DLQ 이동 — ${entry.userId} (${entry.delta}점) — ${entry.error}`,
+      at: entry.failedAt,
+    });
   }
 
   async getOverview(): Promise<DlqOverview> {

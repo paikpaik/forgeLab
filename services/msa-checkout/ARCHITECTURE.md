@@ -535,3 +535,105 @@ orchestrator | grep -c "\"traceId\":\"$TRACE_ID\""`로 정확 일치 검색이 2
 
 관련 플랜: `.claude-plans/20260725/msa-checkout.md`,
 `.claude-plans/20260725/msa-checkout-gateway-hardening.md` (실행 이력 포함).
+
+### 후속 (2026-08-02) — 실사용 페르소나 화면 + 개발자 콘솔(+ 최초로 AdminEventBus 배선) + receipt.html(실제 목적지 데모)
+
+webhook-relay → waiting-room → live-ranking → order-outbox 순으로 확립한 "메인 화면은
+실사용 페르소나만, 시스템 로그/원시 상태는 개발자 콘솔로, 이 시스템이 실제로 쓰이는 곳은
+완전히 별도 스타일의 데모 앱으로" 컨벤션(`.claude/rules/project/convention.md`)을 다섯 번째
+(마지막)로 이 서비스에 적용(`.claude-plans/20260802/msa-checkout-persona-split.md`).
+
+다른 4개와 달리 이 서비스는 서버 쪽 SSE 로그 스트림(`AdminEventBus`)이 아예 없었다 —
+"이벤트 로그"가 순수 클라이언트 액션 로깅뿐이라 saga의 백그라운드 자동 전이는 로그에 안
+잡혔음. 개발자 콘솔의 "로그" 탭을 다른 서비스처럼 실질적으로 만들기 위해, 이번 라운드에서
+유일하게 작은 백엔드를 추가함(사용자에게 먼저 확인받고 진행):
+
+- `AdminEventsModule.forRoot({path:"admin/logs"})`를 gateway에 추가, `checkout.controller.ts`
+  (체크아웃 시작)/`admin.controller.ts`(재고 리셋) 성공 경로에 `AdminEventBus.emit()` 추가.
+  인가 실패(403)처럼 가드가 핸들러 진입 전에 막는 경우는 서버가 그 사실을 emit할 기회 자체가
+  없어 클라이언트 쪽 기록으로 남음(의도된 동작)
+- **실제 버그를 하나 만들고 바로 잡음**: `AdminEventsModule.forRoot`를 처음엔 루트
+  `GatewayAppModule`에 넣었는데, 이를 주입받는 `CheckoutController`/`AdminController`는
+  형제 모듈인 `GatewayModule` 소속이라 NestJS 모듈 캡슐화 규칙상 DI가 안 닿아 컨테이너
+  부팅이 실패함(`Nest can't resolve dependencies ... FORGE_ADMIN_EVENT_BUS`) — 실제
+  컨테이너 로그로 원인을 확인하고, `AdminEventsModule.forRoot`를 `GatewayModule`(실제
+  컨트롤러들이 있는 모듈)로 옮겨서 해결
+
+- `panel.html`을 "장바구니에서 결제하는 손님" 페르소나로 재구성: 헤더 바 + 고객 로그인 +
+  "체크아웃" 히어로(성공 시 "영수증 보기 →" 링크) + "내 주문 내역"만 메인에 남기고, admin
+  로그인/재고 리셋/인가 실패 재현/다중 인스턴스 경쟁 테스트(동시 체크아웃 2건)는 전부
+  "테스트 도구" 모달로 이동. 이벤트 로그는 `PanelUI.mountDevConsole`(로그 탭 + "재고/saga
+  상태" 탭, 2초 폴링)로 옮겨 메인 화면에서 걷어냈다
+- **신규 `public/receipt.html`** — webhook-relay의 `channel.html`/waiting-room의
+  `ticket-shop.html`/live-ranking의 `broadcast-overlay.html`/order-outbox의
+  `order-status.html`에 대응하는, "이 체크아웃 saga가 실제로 도달하는 곳"을 보여주는 완전히
+  다른 스타일(실제 쇼핑몰 결제완료/영수증 페이지 톤)의 데모. saga 상태를 성공 경로(주문
+  접수→주문 확인→재고 확보→결제 확정)와 실패 경로(주문 접수→주문 확인→주문 취소,
+  `lastError` 표시) 둘 다 타임라인으로 표현. 기존 `GET /checkout/:sagaId`를 그대로
+  재사용(Bearer 토큰은 URL 쿼리로 전달) — 새 API 없음
+
+**검증(2026-08-02)**: 유닛 테스트 22개 회귀 없음. Docker 재빌드(gateway만)·재기동 후 curl로
+(1) 체크아웃→saga CONFIRMED 전이→`GET /checkout/:sagaId` 응답이 receipt.html이 기대하는
+그대로(orderId/reservationId 포함) 반환, (2) 체크아웃 시작/재고 리셋 이벤트가
+`/admin/logs/stream`으로 정확히 방송, (3) customer 토큰으로 admin 리셋 시도 시 403 + 서버
+emit 없음(의도대로), (4) widget-scarce 재고 1개에 동시 체크아웃 2건 → 정확히 1건
+CONFIRMED·1건 CANCELLED(`lastError:"재고가 부족합니다"`)까지 전부 재현 확인.
+
+이걸로 forge-lab 5개 실험 전체(webhook-relay/waiting-room/live-ranking/order-outbox/
+msa-checkout)의 페르소나+개발자콘솔+실제목적지 데모 재개편이 완료됐다.
+
+### 후속 (2026-08-02) — 정밀 트레이스/gRPC 뷰: saga 폴러 경계를 넘어 이어지는 트레이스
+
+백로그 항목("msa-checkout 트레이스/gRPC 뷰")을 진행하기 전, 사용자에게 "실무에서 중요한가 /
+forge 수정이 필요한가"를 먼저 확인받았다 — 결론: 메시지 큐 컨슈머·배치 폴러가 나중에 집어가는
+비동기 처리 전반에서 실제로 흔히 겪는 실무 문제(중요)이고, node-forge의 이미 공개된
+`runWithRequestContext`/`getRequestContext` API 조합만으로 해결 가능(forge 수정 불필요) —
+이 판단을 근거로 "정밀 버전"으로 진행.
+
+**문제**: gateway→orchestrator의 `StartCheckout`까지는 원래 HTTP 요청과 같은 실행 체인이라
+trace가 자동으로 이어지지만, 실제 order-service/inventory-service 호출은
+`SagaProcessorService`의 `@Interval` 폴러가 나중에 비동기로 하는 일이라(원래 요청과 실행
+체인이 끊김) `getRequestContext()`가 `undefined`를 반환해 trace가 끊겼다. 계측만 추가하면
+gateway+orchestrator 2홉짜리 trace만 잡히고, 정작 궁금한 order/inventory 호출은 전부 별개
+trace로 보였을 것.
+
+**해결**:
+- `SagaInstanceEntity`에 `traceId` 컬럼 추가 — `startCheckout()`이 생성 시점의
+  `getRequestContext()?.traceId`(gateway로부터 이어진 원본)를 저장
+- `SagaService.driveStep()`을 `runWithRequestContext({traceId: saga.traceId, requestId: 새로
+  발급}, ...)`으로 감싸서, 폴러가 나중에 비동기로 이 saga를 집어가도 저장된 traceId로
+  논리적으로 같은 trace에 다시 이어붙인다 — 이 컨텍스트 안에서 나가는 gRPC 호출
+  (`buildOutgoingTraceMetadata()`)이 이 traceId를 그대로 실어 나르고, order-service/
+  inventory-service의 `GrpcTraceAccessLogInterceptor`가 받아서 자기 컨텍스트로 다시 세운다 —
+  forge 수정 없이 이미 공개된 API 조합만으로 해결됨
+- **msa-checkout에 Redis 신규 도입**(기존 "Redis 없음" 설계 결정을 이번 작업 범위로 명시적으로
+  뒤집음) — 트레이스 스팬(`{service, method, ok, durationMs, at}`) 저장 전용,
+  `trace:{traceId}:spans` 리스트에 최근 50개까지만 유지(`ltrim`), TTL 1시간. 도메인 데이터는
+  여전히 전부 Postgres
+- `src/shared/trace-recorder.ts`의 `TraceRecorderService`/`withSpan()` 헬퍼로 4개
+  프로세스(gateway/orchestrator/order-service/inventory-service) 전부 최소 침습으로 계측 —
+  gateway는 `GatewayModule`에, orchestrator/order-service/inventory-service는 각자의 feature
+  모듈(`OrchestratorModule`/`OrderModule`/`InventoryModule`)에 `RedisModule.forRoot`+
+  `TraceRecorderService`를 등록(직전 AdminEventBus 배선 때 겪은 "루트 앱모듈에 두면 형제
+  모듈이라 DI 안 닿음" 실수를 이번엔 처음부터 피함)
+- `checkout.proto`의 `SagaStatusResponse`에 `traceId` 필드 추가(하위 호환) — gateway가 자체
+  DB 없이도 `GetSagaStatus`로 saga의 traceId를 얻어 `GET /admin/traces/:sagaId`(신규)에서
+  Redis 스팬을 조회할 수 있게 함
+- panel.html 개발자 콘솔에 "트레이스" 탭 추가 — sagaId 입력 시 gateway→orchestrator→
+  order/inventory-service 스팬을 시간순 워터폴로 표시(3초 폴링, saga가 진행 중이면 스팬이
+  실시간으로 채워지는 걸 볼 수 있음)
+
+**검증(2026-08-02, 실제 컨테이너)**: 4개 프로세스 전부 재빌드·재기동 후 DI 에러 없이 정상
+기동 확인. 해피 패스 체크아웃 → `GET /admin/traces/:sagaId` 응답에서 **하나의 traceId
+아래** `orchestrator/StartCheckout` → `gateway/POST /checkout` → `order-service/
+TryCreateOrder` → `orchestrator/drive:STARTED` → `inventory-service/TryReserve` →
+`orchestrator/drive:ORDER_TRIED` → `inventory-service/ConfirmReserve` +
+`order-service/ConfirmOrder`(병렬) → `orchestrator/drive:INVENTORY_TRIED` 순으로 9개 스팬이
+전부 잡히는 것 확인 — gateway와 폴러가 처리한 뒷부분(2초 이상 뒤) 사이의 시간 간격에도
+불구하고 같은 traceId로 정확히 이어짐. widget-scarce 재고 0으로 만든 뒤 체크아웃 →
+`COMPENSATING`/`CANCELLED` 보상 경로에서도 `order-service/CancelOrder`까지 같은 traceId로
+잡히는 것 확인. 유닛 테스트 22개 회귀 없음(`SagaService` 생성자에 `TraceRecorderService`
+인자가 추가돼 테스트의 fake recorder로 대응).
+
+**잔존 작업**: 없음. 브라우저에서 개발자 콘솔 "트레이스" 탭의 실제 워터폴 렌더링은 사용자가
+직접 확인 필요(브라우저 자동화 도구 없어 API 계약까지만 검증).

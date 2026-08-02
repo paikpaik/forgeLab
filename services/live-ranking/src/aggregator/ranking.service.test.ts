@@ -1,14 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { ForgeMetrics } from "@paikpaik/node-forge/metrics";
 import type { ForgeRedisClient } from "@paikpaik/node-forge/redis";
+import { AdminEventBus } from "@paikpaik/node-forge/events";
 import { FakeRedisClient } from "../test-utils/fake-redis-client";
 import { RankingService } from "./ranking.service";
 import { RankingMetrics } from "./ranking.metrics";
+import type { AdminLogEvent } from "./admin-log-event";
 
 function createService() {
   const redis = new FakeRedisClient();
   const metrics = new RankingMetrics(new ForgeMetrics({ defaultMetrics: false }));
-  const service = new RankingService(redis as unknown as ForgeRedisClient, metrics);
+  const service = new RankingService(
+    redis as unknown as ForgeRedisClient,
+    metrics,
+    new AdminEventBus<AdminLogEvent>(),
+  );
   return { service, redis };
 }
 
@@ -31,6 +37,29 @@ describe("RankingService.applyDelta", () => {
     await service.applyDelta("default", "u1", 10);
     const score = await service.applyDelta("default", "u1", -3);
     expect(score).toBe(7);
+  });
+});
+
+describe("RankingService.applyDeltaOnce — claim+이펙트 원자화", () => {
+  it("처음 보는 eventId는 반영되고 applied: true", async () => {
+    const { service } = createService();
+    const result = await service.applyDeltaOnce("default", "u1", 10, "event-1");
+    expect(result).toEqual({ applied: true, score: 10 });
+  });
+
+  it("같은 eventId로 다시 호출해도 반영되지 않는다(재배달 시뮬레이션) — applied: false, 점수 불변", async () => {
+    const { service } = createService();
+    await service.applyDeltaOnce("default", "u1", 10, "event-1");
+    const result = await service.applyDeltaOnce("default", "u1", 10, "event-1");
+    expect(result).toEqual({ applied: false, score: 10 });
+    expect(await service.getUserRank("default", "u1")).toEqual({ rank: 1, score: 10 });
+  });
+
+  it("다른 eventId면 같은 유저라도 각각 반영되어 누적된다", async () => {
+    const { service } = createService();
+    await service.applyDeltaOnce("default", "u1", 10, "event-1");
+    const result = await service.applyDeltaOnce("default", "u1", 5, "event-2");
+    expect(result).toEqual({ applied: true, score: 15 });
   });
 });
 

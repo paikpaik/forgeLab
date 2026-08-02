@@ -96,7 +96,9 @@ flowchart TB
 | POST | `/orders` | 주문 생성. `{ item, amount }` — 주문 저장과 outbox 기록을 하나의 트랜잭션으로 커밋 |
 | GET | `/orders` | 최근 주문 목록. 각 항목에 `stage`(created/published/confirmed) 포함 |
 | GET | `/orders/:id` | 단건 조회 |
-| GET | `/outbox/dead` | dead-lettered outbox 레코드 목록/개수 — 발행 5회 연속 실패 시 격리된 레코드 확인용 |
+| GET | `/admin/outbox/dead` | dead-lettered outbox 레코드 목록/개수 — 발행 5회 연속 실패 시 격리된 레코드 확인용(admin/test 네이밍 컨벤션 적용, 기존 `/outbox/dead`에서 이동) |
+| POST | `/admin/outbox/dead/:id/revive` | 죽은 레코드 복구 — `deadAt`/`attempts`/`lastError`를 리셋하고, poison topic이었으면 정상 topic으로 고쳐서 다음 폴링에 재발행되게 함. 없거나 안 죽은 id면 `E9404` |
+| GET | `/admin/logs/stream` | SSE — created/published 이벤트 실시간 스트림(node-forge 1.0.9 `AdminEventsModule`) |
 | GET | `/health` | Postgres + Kafka 연결 상태 (5초 캐싱) |
 | GET | `/metrics` | node-forge 기본 지표 + `order_outbox_orders_created_total` + kafka-forge 발행 지표 |
 | GET | `/panel.html` | 패널 UI (dashboard가 iframe으로 띄움) |
@@ -105,6 +107,7 @@ flowchart TB
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
+| GET | `/admin/logs/stream` | SSE — confirmed 이벤트 실시간 스트림(node-forge 1.0.9 `AdminEventsModule`). api와 별도 프로세스라 자기 포트에서 자기 이벤트만 방송 — panel.html이 CORS로 cross-origin 구독 |
 | GET | `/health` | Postgres + Kafka 연결 상태 |
 | GET | `/metrics` | node-forge 기본 지표 + kafka-forge 소비 지표(`kafka_forge_consumed_total`, `kafka_forge_handled_total` 등) |
 
@@ -228,3 +231,119 @@ fulfillment는 별도 비즈니스 API가 없다 — api가 같은 Postgres를 �
 테스트 데이터는 검증 후 `TRUNCATE orders, outbox_records`로 정리.
 
 관련 플랜: `.claude-plans/20260719/order-outbox-pipeline.md` (실행 이력 포함).
+
+### 후속 (2026-08-01) — 공유 패널 UI + admin API 네이밍 통일 + SSE 로그 스트리밍
+
+`dashboard-panel-expansion` 플랜(`.claude-plans/20260801/dashboard-panel-expansion.md`)의
+1~3단계를 적용:
+
+- **공유 패널 UI**: `panel.html`의 카드/버튼/폼/로그/가이드 CSS를 `@forge-lab/panel-ui`(신규
+  워크스페이스 패키지, `services/shared-panel-ui/`)로 이동. `main.ts`(api)가
+  `require.resolve("@forge-lab/panel-ui/package.json")`로 위치를 찾아 `/shared/*`로 마운트.
+  이 과정에서 Docker 빌드 컨텍스트가 서비스 디렉토리 단위였던 게 npm workspace 심볼릭 링크를
+  못 찾는 구조적 문제라는 걸 발견 — `docker-compose.yml`/`Dockerfile`을 레포 루트 빌드
+  컨텍스트로 전면 재구성(사용자 확인 후 진행, 4개 실험 전부 동일 적용)
+- **admin API 네이밍 통일**: `OutboxController`를 `/outbox` → `/admin/outbox`로 이동
+  (`rules/project/convention.md`의 Admin/Test API 네이밍 규칙 적용, `panel.html`의
+  `/outbox/dead` fetch도 `/admin/outbox/dead`로 동반 수정)
+- **SSE 로그 스트리밍**: "생성→발행→확인" 3단계를 폴링 없이 실시간으로 보여주는 파일럿을
+  api(`created`/`published`)와 fulfillment(`confirmed`, cross-origin+CORS) 양쪽에 구현
+
+이 SSE 파일럿을 만들고 나서, `AdminEventsService`(rxjs `Subject` 브로드캐스터)와
+`AdminLogsController`(`@Sse()` 래퍼) 두 파일이 order-outbox 도메인과 무관한 순수 인프라
+코드라는 걸 확인 — 나머지 3개 서비스로 그대로 복붙하기 전에
+`proposals/node-forge/20260801/20260801-admin-event-sse-stream.md` 제안서를 작성했고,
+**같은 날 node-forge 1.0.9로 반영**돼서 바로 공식 API로 교체:
+
+- `@paikpaik/node-forge/events`의 `AdminEventBus<T>` — 로컬 `AdminEventsService`와 동일한
+  rxjs `Subject` 기반이지만, `emit()`이 `(type, message)` 2개 인자가 아니라 이벤트 객체
+  1개(`emit(event: T)`)를 받는 시그니처 — 호출부(`orders.service.ts`,
+  `outbox-publisher.service.ts`, `order-created.consumer.ts`) 전부 `{ type, message, at }`
+  객체를 직접 만들어 넘기도록 수정
+- `@paikpaik/node-forge/events/nestjs`의 `AdminEventsModule.forRoot({ path })` — `ADMIN_EVENT_BUS`
+  토큰 등록 + `<path>/stream` SSE 컨트롤러를 동적으로 함께 생성. `@Controller(path)`를 클래스
+  선언이 아니라 함수 호출로 동적 적용하는 새로운 패턴이라, node-forge가 자체 smoke-test에서
+  esbuild(tsup) 번들 dist에도 데코레이터 메타데이터가 살아있는지 미리 검증해둔 걸 확인
+  (20260725 RolesGuard DI 버그와 같은 클래스의 문제를 이번엔 사전에 막음)
+- 로컬 `admin-events.service.ts`/`admin-logs.controller.ts` 삭제, `admin-log-event.ts`(payload
+  타입만 정의하는 파일)로 대체 — `OrdersModule`/`FulfillmentModule`이 각자
+  `AdminEventsModule.forRoot({ path: "admin/logs" })`를 import하는 구조로 변경
+
+**검증(2026-08-01, 실제 컨테이너 대상)**: 주문 1건 생성 → `curl -sN`으로 api(3200)와
+fulfillment(3201)의 `/admin/logs/stream`을 동시에 구독해서 `created`(api) →
+`published`(api) → `confirmed`(fulfillment) 3개 이벤트가 순서대로, 올바른 페이로드로
+도착하는 것 확인. 최초 시도에서 fulfillment 쪽이 비어 있었던 건 컨테이너 재기동 직후 Kafka
+컨슈머 그룹 리밸런스(~22초)가 안 끝난 상태에서 발행한 타이밍 문제였고, 리밸런스 완료 후
+재시도하니 정상 수신 — node-forge 1.0.9 자체 회귀는 아님. 유닛 테스트 19개 전부 통과.
+
+**잔존 작업**: SSE를 waiting-room/live-ranking으로 확산은 완료(2026-08-01, 아래 후속 참고).
+msa-checkout은 포트 은닉 원칙과 충돌해 제외하기로 함.
+
+### 후속 (2026-08-01) — 데드레터 레코드 복구(revive) API + UI
+
+오랫동안 미뤄져 있던 P0 — 죽은 레코드를 확인만 할 수 있고 되살릴 방법이 없었던 공백을 메움.
+
+- `TypeormOutboxStore.revive(id)`: `deadAt`/`attempts`/`lastError`를 리셋해서 `fetchPending()`
+  대상으로 되돌린다. 이 랩에서 레코드가 죽는 유일한 원인은 데모용 poison topic(실제로
+  유효하지 않은 문자열이라 재시도해도 항상 다시 실패)이라, 카운터만 리셋하면 20~25초 뒤
+  다시 죽어서 "복구"가 아무 일도 안 한 것처럼 보인다 — 그래서 topic이 poison이면 정상
+  `OrderCreated.topic`으로 같이 고쳐서, 실무의 "원인을 고친 뒤 재시도"를 시뮬레이션한다
+- `OutboxController`에 `POST /admin/outbox/dead/:id/revive` 추가, 없거나 안 죽은 id면
+  `ForgeBizError("E9404")`
+- `public/panel.html`: 죽은 레코드 목록의 각 행에 "복구" 버튼 추가, 클릭 시 revive 호출 후
+  주문/데드레터 목록 갱신
+- 테스트 3건 추가(poison topic 복구 시 topic 수정 확인/안 죽은 레코드는 revived:false/존재
+  하지 않는 id도 revived:false) — 총 22개, 전부 통과
+
+**검증(2026-08-01, 실제 컨테이너)**: `__outbox-fail__` 주문 생성 → 27초 대기(재시도 5회
+소진, 실제 dead-letter 발생 확인) → `POST .../revive` 호출 → 8초 뒤 해당 주문이 실제로
+`stage: "confirmed"`(`publishedAt`/`confirmedAt` 둘 다 세팅)로 전이된 것 확인, 죽은
+레코드 수도 감소 확인. 관측만 되던 걸 실제 대응까지 가능하게 만든 것을 end-to-end로
+재현했다.
+
+### 후속 (2026-08-01) — OutboxPublisherService.flush()에 try/catch 추가 (오래된 P0 해소)
+
+`@Interval`의 `setInterval`은 콜백이 반환한 Promise를 기다리지 않는다 — `flush()` 안에서
+`publishPending()`이 던지면 구조화된 pino 로그가 아니라 raw unhandled rejection으로만
+남아서 검색/관측이 안 됐던 오래된 P0. kafka-forge의 `OutboxPublisher.publishPending()`
+소스를 직접 읽어서 실제로 어디가 try/catch 밖인지 확인했다: 개별 레코드의 발행 실패는
+1.0.5부터 내부에서 이미 흡수하지만(`console.error`로 자체 로깅), 맨 앞의
+`await this.store.fetchPending(limit)`(DB 조회)는 그 밖에 있어서 DB 장애 시 그대로
+던져진다.
+
+- `flush()`를 `try { ... } catch (err) { this.logger.error(...) }`로 감쌈 — 다음 폴링
+  주기는 `setInterval`이 알아서 계속 진행하므로 재시작 로직은 불필요
+
+**검증(2026-08-01, 실제 컨테이너)**: 처음엔 redpanda를 내려서 재현을 시도했으나, kafka-forge
+1.0.5가 이미 개별 레코드 실패를 내부에서 흡수해서(`[OutboxPublisher] 발행 실패, 다음
+폴링에서 재시도` 자체 로그만 남고 `flush()`까지 안 올라옴) 재현이 안 됐다 — 소스를 다시
+읽고 나서 **Postgres를 내려야** `fetchPending()`이 던진다는 걸 확인. `docker compose stop
+postgres` → 5초 간격으로 3회 연속 구조화된 로그(`{"level":50,...,"context":
+"OutboxPublisherService","msg":"outbox 발행 폴링 실패: getaddrinfo ENOTFOUND postgres"}`,
+전체 스택트레이스 포함) 확인, 폴러는 죽지 않고 계속 재시도함. `docker compose start
+postgres` 후 자동 회복, 새 주문이 정상적으로 `confirmed`까지 이어지는 것까지 확인.
+
+### 후속 (2026-08-02) — 실사용 페르소나 화면 + 개발자 콘솔 + order-status.html(실제 목적지 데모)
+
+webhook-relay → waiting-room → live-ranking 순으로 확립한 "메인 화면은 실사용 페르소나만,
+시스템 로그/원시 상태는 개발자 콘솔로, 이 시스템이 실제로 쓰이는 곳은 완전히 별도 스타일의
+데모 앱으로" 컨벤션(`.claude/rules/project/convention.md`)을 네 번째로 이 서비스에 적용
+(`.claude-plans/20260802/order-outbox-persona-split.md`). 백엔드는 전혀 건드리지 않고
+`public/` 정적 파일만 변경/추가했다.
+
+- `panel.html`을 "온라인 스토어에서 주문하는 손님" 페르소나로 재구성: 헤더 바 + "주문하기"
+  히어로(생성 직후 "주문 조회하기 →" 링크로 `order-status.html`을 새 탭에 엶) + "최근 주문"
+  목록만 메인에 남기고, "발행 실패 유발"(poison 트리거)은 "테스트 도구" 모달로 이동. 이벤트
+  로그/dead-letter 목록은 `PanelUI.mountDevConsole`(로그 탭 + "Outbox 상태" 탭, 3초 폴링)로
+  옮겨 메인 화면에서 걷어냈다. fulfillment(3201, cross-origin)의 SSE는 `mountDevConsole`이
+  반환한 `devConsole.log()` 핸들을 그대로 재사용해 같은 로그 탭에 시간순으로 합침
+- **신규 `public/order-status.html`** — webhook-relay의 `channel.html`/waiting-room의
+  `ticket-shop.html`/live-ranking의 `broadcast-overlay.html`에 대응하는, "이 트랜잭셔널
+  아웃박스가 실제로 이어지는 곳"을 보여주는 완전히 다른 스타일(실제 쇼핑몰 주문조회/배송추적
+  페이지 톤)의 데모. 주문번호 검색창 + 결제완료→상품준비중→배송확정 수직 타임라인(완료
+  체크마크/진행중 펄스 애니메이션/대기 회색조). 기존 `GET /orders/:id`를 그대로 1.5초
+  폴링으로 재사용 — 새 API 없음
+
+**검증(2026-08-02)**: 유닛 테스트 22개 회귀 없음. Docker 재빌드(api만)·재기동 후 curl로
+주문 생성 → `GET /orders/:id`가 created→published→confirmed까지 정확히 반영되는 것 확인,
+poison 주문 → 5회 재시도 후 dead-letter API 응답 확인 → revive API로 정상 복구까지 재현.

@@ -1,5 +1,13 @@
 ## 플랜 실행 이력
 
+### 후속: 2026-08-01 — claim+이펙트 크래시 윈도우 실제 재현 및 원자화(오래된 P0 해소)
+
+정밀 타이밍 `docker kill`로 실제 버그를 먼저 재현(점수 영구 유실 + `kafka_forge_deduped_total`
+증가를 확인)한 뒤, `RankingService.applyDeltaOnce()`(Lua 스크립트로 claim+zincrby 원자화)로
+수정. 같은 정밀 타이밍으로 재검증해 "정확히 한 번만 반영"(유실도 중복도 없음)을 확인. panel.html에
+"크래시 윈도우 재현" 카드를 영구 트리거로 추가(자세한 내용은 `ARCHITECTURE.md`의 2026-08-01
+후속 참고).
+
 ### 후속: 2026-07-19 (node-forge/kafka-forge 1.0.4 반영 + 미뤄둔 개선 일괄 진행)
 
 사용자가 "제안서 먼저 다 쓰고, 패널 리팩토링은 수정된 forge 버전으로 같이 진행하자"고

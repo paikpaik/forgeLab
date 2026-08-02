@@ -1,6 +1,9 @@
-import { Body, Controller, Get, Param, Post, UseGuards, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Param, Post, UseGuards, UseInterceptors } from "@nestjs/common";
 import { ResponseInterceptor } from "@paikpaik/node-forge/response/nestjs";
 import { JwtAuthGuard, RolesGuard, Roles } from "@paikpaik/node-forge/auth/nestjs";
+import { AdminEventBus } from "@paikpaik/node-forge/events";
+import { ADMIN_EVENT_BUS } from "@paikpaik/node-forge/events/nestjs";
+import type { AdminLogEvent } from "../shared/admin-log-event";
 import { InventoryAdminGrpcClient } from "./clients/inventory-admin-grpc-client";
 import { ResetStockDto } from "./dto/reset-stock.dto";
 
@@ -10,12 +13,20 @@ import { ResetStockDto } from "./dto/reset-stock.dto";
 @UseInterceptors(ResponseInterceptor)
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class AdminController {
-  constructor(private readonly inventoryAdmin: InventoryAdminGrpcClient) {}
+  constructor(
+    private readonly inventoryAdmin: InventoryAdminGrpcClient,
+    @Inject(ADMIN_EVENT_BUS) private readonly adminEvents: AdminEventBus<AdminLogEvent>,
+  ) {}
 
   @Post(":productId/reset")
   @Roles("admin")
   async reset(@Param("productId") productId: string, @Body() dto: ResetStockDto) {
-    return this.inventoryAdmin.resetStock(productId, dto.total);
+    const result = await this.inventoryAdmin.resetStock(productId, dto.total);
+    this.adminEvents.emit({
+      message: `재고 리셋 — ${productId}를 ${dto.total}로`,
+      at: new Date().toISOString(),
+    });
+    return result;
   }
 
   @Get(":productId")

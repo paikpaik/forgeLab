@@ -13,6 +13,9 @@ async function bootstrap(): Promise<void> {
 
   // 이 실험의 유일한 REST 진입점 — panel.html도 gateway가 서빙한다.
   app.useStaticAssets(join(__dirname, "..", "..", "public"));
+  // 4개 실험 패널 공유 CSS/JS — require.resolve로 실제 위치를 찾는다(waiting-room과 동일 패턴).
+  const panelUiDist = join(require.resolve("@forge-lab/panel-ui/package.json"), "..", "dist");
+  app.useStaticAssets(panelUiDist, { prefix: "/shared/" });
 
   // panel.html이 같은 오리진에서 서빙되므로 기능상 CORS가 꼭 필요하진 않지만, "정책"
   // 계층이 실제로 존재해야 하므로 명시적으로 설정한다 — CORS_ORIGINS 미지정 시 랩 환경

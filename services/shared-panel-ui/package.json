@@ -1,0 +1,7 @@
+{
+  "name": "@forge-lab/panel-ui",
+  "private": true,
+  "version": "0.1.0",
+  "description": "4개 실험 패널(panel.html)이 공유하는 카드/버튼/로그 CSS + 폴링·SSE 연결 JS 유틸. 빌드 단계 없이 dist/를 그대로 소스로 관리한다(순수 CSS/vanilla JS라 트랜스파일 대상이 없음).",
+  "files": ["dist"]
+}

@@ -3,7 +3,7 @@ import { ResponseInterceptor } from "@paikpaik/node-forge/response/nestjs";
 import { DlqLogService } from "./dlq-log.service";
 import type { DlqOverview } from "./dlq-log.service";
 
-@Controller("dlq")
+@Controller("admin/dlq")
 @UseInterceptors(ResponseInterceptor)
 export class DlqController {
   constructor(private readonly dlqLogService: DlqLogService) {}
