@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>live-auction</title>
+<link rel="stylesheet" href="/shared/panel-ui.css" />
+<style>
+  /* 카드/버튼/폼/로그/가이드/개발자콘솔 공통 스타일은 /shared/panel-ui.css 참고.
+     메인 화면은 실제 온라인 경매에서 입찰하는 손님 페르소나만 남긴다 — 경매 생성/강제
+     종료/경쟁 테스트 같은 개발자 검증 도구는 모달로, 로그·Redis 원시 상태는 개발자
+     콘솔로 옮겼다. */
+  body { padding: 0; }
+  #app-main { padding: 1.5rem; }
+
+  .app-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.9rem 1.5rem; border-bottom: 1px solid var(--panel-border);
+  }
+  .app-brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; font-size: 1rem; }
+  .app-logo { font-size: 1.3rem; }
+  .app-header-right { display: flex; align-items: center; gap: 0.7rem; }
+  .live-chip {
+    font-size: 0.78rem; padding: 0.3rem 0.7rem; border-radius: 999px;
+    background: var(--panel-card-bg); border: 1px solid var(--panel-border); color: var(--panel-muted);
+  }
+  .tools-link { font-size: 0.78rem; color: var(--panel-muted); }
+
+  input[type="text"], input[type="number"] { width: 9rem; }
+
+  .auction-hero { text-align: center; }
+  .auction-hero .price { font-size: 2.4rem; font-weight: 900; color: #1a7f4b; margin: 0.3rem 0; }
+  .auction-hero .bidder { color: var(--panel-muted); font-size: 0.85rem; }
+  .auction-hero .countdown { font-size: 0.9rem; color: #9a6400; margin-top: 0.3rem; }
+  .auction-hero .countdown.ended { color: var(--panel-faint); }
+  .bid-row { display: flex; justify-content: center; gap: 0.6rem; margin-top: 1rem; flex-wrap: wrap; }
+  .bid-feedback { text-align: center; font-size: 0.8rem; margin-top: 0.5rem; min-height: 1.2em; }
+  .bid-feedback.err { color: #b42318; }
+  .bid-feedback.ok { color: #1a7f4b; }
+
+  .bids { display: flex; flex-direction: column; gap: 0.35rem; }
+  .bid-history-row {
+    display: grid; grid-template-columns: 1fr 6rem 8rem; align-items: center; gap: 0.5rem;
+    padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid var(--panel-border); font-size: 0.82rem;
+  }
+  .bid-history-row .amount { text-align: right; font-weight: 700; }
+  .bid-history-row .at { color: var(--panel-faint); font-size: 0.72rem; text-align: right; }
+  .bid-history-row.rejected { opacity: 0.55; }
+  .bid-history-row.rejected .amount { text-decoration: line-through; font-weight: 500; }
+  .rejected-tag {
+    display: inline-block; margin-left: 0.3rem; padding: 0.05rem 0.35rem; border-radius: 4px;
+    background: #fde2e2; color: #a12525; font-size: 0.68rem; font-weight: 600; text-decoration: none;
+  }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 900;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px;
+    padding: 1.25rem 1.4rem; width: min(28rem, 92vw); max-height: 85vh; overflow-y: auto;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  }
+  .modal h3 { margin: 0 0 0.9rem; font-size: 1rem; }
+  .modal h4 { margin: 1.1rem 0 0.5rem; font-size: 0.85rem; color: var(--panel-muted); }
+  .modal h4:first-of-type { margin-top: 0; }
+
+  /* 개발자 콘솔 "원시 상태" 탭 */
+  .raw-block { font-family: ui-monospace, monospace; font-size: 0.78rem; white-space: pre-wrap; background: var(--panel-code-bg); border-radius: 6px; padding: 0.6rem 0.8rem; }
+</style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-brand"><span class="app-logo">🔨</span><span class="app-name">라이브 경매</span></div>
+    <div class="app-header-right">
+      <span class="live-chip" id="live-chip">경매 없음</span>
+      <a href="#" class="tools-link" id="open-tools-btn">테스트 도구</a>
+    </div>
+  </header>
+
+  <main id="app-main">
+    <section class="card full">
+      <h2>경매 선택</h2>
+      <div class="form-row" style="justify-content:center">
+        <select id="auction-select" style="width:20rem"><option value="">진행 중인 경매 없음</option></select>
+      </div>
+    </section>
+
+    <section class="card full" id="bid-card" hidden>
+      <h2 id="auction-title">-</h2>
+      <div class="auction-hero">
+        <div class="price" id="current-price">-</div>
+        <div class="bidder" id="current-bidder">아직 입찰이 없습니다</div>
+        <div class="countdown" id="countdown">-</div>
+      </div>
+      <div class="bid-row">
+        <label>내 아이디 <input type="text" id="bidder-id-input" value="me"></label>
+        <label>입찰가 <input type="number" id="bid-amount-input"></label>
+        <button class="primary" id="bid-btn">입찰하기</button>
+        <a class="tools-link" id="spectator-link" href="#" target="_blank" rel="noopener">🎥 관전자 화면으로 보기 ↗</a>
+      </div>
+      <div class="bid-feedback" id="bid-feedback"></div>
+    </section>
+
+    <section class="card full" id="bids-card" hidden>
+      <h2>입찰 이력</h2>
+      <div class="bids" id="bid-list"></div>
+    </section>
+
+    <section class="card full guide">
+      <h2>둘러보기</h2>
+      <ol>
+        <li><strong>입찰</strong> — 경매를 고르고 최소 증분 이상으로 입찰하면 즉시 반영되고,
+          다른 사람이 입찰하는 것도 WebSocket으로 실시간으로 보입니다.</li>
+        <li><strong>관전자 화면</strong> — "🎥 관전자 화면으로 보기"를 누르면 이 경매가 실제로
+          중계되는 곳(전광판/방송 화면 스타일)을 별도 창으로 볼 수 있습니다.</li>
+        <li><strong>다중 인스턴스 동기화</strong> — 이 서비스는 처음부터 다중 인스턴스
+          전제로 만들어졌습니다. <code>docker compose up -d --scale app=3</code>으로
+          스케일하면 3500/3501/3502 중 다른 포트로 접속해도 입찰이 실시간으로 똑같이
+          보입니다(Redis pub/sub로 인스턴스 간에 방송됨).</li>
+        <li><strong>동시 입찰 경쟁</strong> — 우측 상단 "테스트 도구"에서 "동시 입찰 2건
+          발사"를 누르면 높은 값/낮은 값을 거의 동시에 보내서, 순서와 무관하게 항상 더 높은
+          금액이 최종 상태로 수렴하는지(Redis 분산 락) 확인할 수 있습니다.</li>
+        <li><strong>개발자 콘솔</strong> — 우측 하단 버튼에서 실시간 로그와 Redis 원시
+          상태를 확인할 수 있습니다. 지표는 <a href="/metrics" target="_blank" rel="noopener">/metrics</a>에서 확인하세요.</li>
+      </ol>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="tools-modal" hidden>
+    <div class="modal">
+      <h3>테스트 도구</h3>
+
+      <h4>새 경매 만들기</h4>
+      <div class="form-row">
+        <label>제목 <input type="text" id="new-title-input" value="빈티지 시계"></label>
+        <label>시작가 <input type="number" id="new-price-input" value="100"></label>
+      </div>
+      <div class="form-row">
+        <label>최소 증분 <input type="number" id="new-increment-input" value="10"></label>
+        <label>진행 시간(초) <input type="number" id="new-duration-input" value="120"></label>
+        <button class="primary" id="create-auction-btn">만들기</button>
+      </div>
+
+      <h4>강제 종료</h4>
+      <div class="form-row"><button class="danger" id="force-end-btn">현재 경매 즉시 종료</button></div>
+
+      <h4>동시 입찰 경쟁 테스트</h4>
+      <p class="hint" style="margin-top:0">현재가+50(높음)과 현재가+20(낮음)을 거의 동시에 발사합니다. 순서와 무관하게 항상 더 높은 금액이 최종 상태로 남아야 합니다.</p>
+      <div class="form-row"><button class="danger" id="race-btn">동시 입찰 2건 발사</button></div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/shared/panel-ui.js"></script>
+  <script>
+    let currentAuctionId = null;
+    let currentState = null;
+    const socket = io();
+
+    function openModal(id) { document.getElementById(id).hidden = false; }
+    function closeModal(id) { document.getElementById(id).hidden = true; }
+    document.querySelectorAll(".modal-backdrop").forEach((backdrop) => {
+      backdrop.addEventListener("click", (event) => { if (event.target === backdrop) closeModal(backdrop.id); });
+    });
+    document.getElementById("open-tools-btn").addEventListener("click", (event) => {
+      event.preventDefault();
+      openModal("tools-modal");
+    });
+
+    PanelUI.mountDevConsole({
+      streamUrl: "/admin/logs/stream",
+      title: "개발자 콘솔",
+      logLabel: "로그",
+      tabs: [{ id: "raw", label: "원시 상태", pollMs: 3000, render: renderRawTab }],
+    });
+
+    async function renderRawTab(container) {
+      if (!currentAuctionId) {
+        container.innerHTML = '<div class="hint">먼저 경매를 선택하세요</div>';
+        return;
+      }
+      const [stateRes, bidsRes] = await Promise.all([
+        fetch("/auctions/" + currentAuctionId),
+        fetch("/auctions/" + currentAuctionId + "/bids"),
+      ]);
+      const state = (await stateRes.json()).data;
+      const bids = (await bidsRes.json()).data ?? [];
+      container.innerHTML =
+        '<div class="hint" style="margin-top:0">Redis 미러(auction:' + currentAuctionId.slice(0, 8) + '…:current)</div>' +
+        '<pre class="raw-block">' + JSON.stringify(state, null, 2) + "</pre>" +
+        '<div class="hint">최근 입찰 원시 목록(' + bids.length + '건)</div>' +
+        '<pre class="raw-block">' + JSON.stringify(bids.slice(0, 5), null, 2) + "</pre>";
+    }
+
+    async function refreshAuctionList() {
+      const res = await fetch("/auctions");
+      const list = (await res.json()).data ?? [];
+      const select = document.getElementById("auction-select");
+      const previousValue = select.value;
+
+      if (list.length === 0) {
+        select.innerHTML = '<option value="">진행 중인 경매 없음</option>';
+        document.getElementById("live-chip").textContent = "경매 없음";
+        return;
+      }
+
+      select.innerHTML = list.map((a) => '<option value="' + a.id + '">' + a.title + "</option>").join("");
+      document.getElementById("live-chip").textContent = list.length + "건 진행 중";
+
+      if (list.some((a) => a.id === previousValue)) {
+        select.value = previousValue;
+      } else {
+        select.value = list[0].id;
+        selectAuction(list[0].id);
+      }
+    }
+
+    document.getElementById("auction-select").addEventListener("change", (event) => {
+      if (event.target.value) selectAuction(event.target.value);
+    });
+
+    function selectAuction(auctionId) {
+      if (currentAuctionId) socket.emit("leave", { auctionId: currentAuctionId });
+      currentAuctionId = auctionId;
+      socket.emit("join", { auctionId });
+      document.getElementById("spectator-link").href = "/spectator.html?auctionId=" + auctionId;
+      refreshState();
+    }
+
+    async function refreshState() {
+      if (!currentAuctionId) return;
+      const res = await fetch("/auctions/" + currentAuctionId);
+      const body = await res.json();
+      currentState = body.data;
+      renderState();
+    }
+
+    function renderState() {
+      if (!currentState) return;
+      document.getElementById("bid-card").hidden = false;
+      document.getElementById("bids-card").hidden = false;
+      document.getElementById("auction-title").textContent = currentState.title;
+      document.getElementById("current-price").textContent = currentState.currentHighestBid.toLocaleString("ko-KR") + "원";
+      document.getElementById("current-bidder").textContent = currentState.currentHighestBidderId
+        ? "최고 입찰자: " + currentState.currentHighestBidderId
+        : "아직 입찰이 없습니다";
+      document.getElementById("bid-amount-input").value = currentState.currentHighestBid + currentState.minIncrement;
+
+      const countdownEl = document.getElementById("countdown");
+      if (currentState.status === "ENDED") {
+        countdownEl.textContent = "종료됨" + (currentState.winnerId ? " — 낙찰자 " + currentState.winnerId + " (" + currentState.finalPrice + "원)" : "");
+        countdownEl.className = "countdown ended";
+      } else {
+        countdownEl.className = "countdown";
+      }
+    }
+
+    setInterval(() => {
+      if (!currentState || currentState.status === "ENDED") return;
+      const remainingMs = new Date(currentState.endsAt).getTime() - Date.now();
+      const countdownEl = document.getElementById("countdown");
+      if (remainingMs <= 0) {
+        countdownEl.textContent = "마감 처리 중…";
+      } else {
+        countdownEl.textContent = "남은 시간: " + Math.ceil(remainingMs / 1000) + "초";
+      }
+    }, 1000);
+
+    socket.on("bid-placed", (data) => {
+      if (currentState) {
+        currentState.currentHighestBid = data.amount;
+        currentState.currentHighestBidderId = data.bidderId;
+        renderState();
+        refreshBidList();
+      }
+    });
+    socket.on("auction-ended", (data) => {
+      if (currentState) {
+        currentState.status = "ENDED";
+        currentState.winnerId = data.winnerId;
+        currentState.finalPrice = data.finalPrice;
+        renderState();
+      }
+    });
+
+    async function refreshBidList() {
+      if (!currentAuctionId) return;
+      const res = await fetch("/auctions/" + currentAuctionId + "/bids");
+      const bids = (await res.json()).data ?? [];
+      const list = document.getElementById("bid-list");
+      list.innerHTML = bids.length
+        ? bids
+            .map((b) => {
+              const rejected = b.status === "REJECTED";
+              const title = rejected ? ' title="거절됨 — ' + b.rejectionReason + '"' : "";
+              return (
+                '<div class="bid-history-row' + (rejected ? " rejected" : "") + '"' + title + "><span>" + b.bidderId + "</span><span class=\"amount\">" +
+                b.amount.toLocaleString("ko-KR") + '원' + (rejected ? " <span class=\"rejected-tag\">거절</span>" : "") +
+                '</span><span class="at">' + new Date(b.placedAt).toLocaleTimeString("ko-KR", { hour12: false }) + "</span></div>"
+              );
+            })
+            .join("")
+        : '<div class="hint">아직 입찰이 없습니다</div>';
+    }
+
+    document.getElementById("bid-btn").addEventListener("click", async () => {
+      if (!currentAuctionId) return;
+      const bidderId = document.getElementById("bidder-id-input").value.trim() || "me";
+      const amount = Number(document.getElementById("bid-amount-input").value);
+      const feedback = document.getElementById("bid-feedback");
+      const res = await fetch("/auctions/" + currentAuctionId + "/bids", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bidderId, amount }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        feedback.textContent = body.error?.message || "입찰이 거부되었습니다";
+        feedback.className = "bid-feedback err";
+        return;
+      }
+      feedback.textContent = amount.toLocaleString("ko-KR") + "원 입찰 성공";
+      feedback.className = "bid-feedback ok";
+      await refreshState();
+      await refreshBidList();
+    });
+
+    document.getElementById("create-auction-btn").addEventListener("click", async () => {
+      const title = document.getElementById("new-title-input").value.trim() || "경매 아이템";
+      const startingPrice = Number(document.getElementById("new-price-input").value) || 100;
+      const minIncrement = Number(document.getElementById("new-increment-input").value) || 10;
+      const durationSeconds = Number(document.getElementById("new-duration-input").value) || 120;
+      const res = await fetch("/admin/auctions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title, description: title, startingPrice, minIncrement, durationSeconds }),
+      });
+      const body = await res.json();
+      closeModal("tools-modal");
+      await refreshAuctionList();
+      if (res.ok && body.data) {
+        document.getElementById("auction-select").value = body.data.id;
+        selectAuction(body.data.id);
+      }
+    });
+
+    document.getElementById("force-end-btn").addEventListener("click", async () => {
+      if (!currentAuctionId) return;
+      await fetch("/admin/auctions/" + currentAuctionId + "/end", { method: "POST" });
+      closeModal("tools-modal");
+      await refreshState();
+    });
+
+    document.getElementById("race-btn").addEventListener("click", async () => {
+      if (!currentAuctionId || !currentState) return;
+      const base = currentState.currentHighestBid;
+      closeModal("tools-modal");
+      await Promise.all([
+        fetch("/auctions/" + currentAuctionId + "/bids", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ bidderId: "race-high", amount: base + 50 }),
+        }),
+        fetch("/auctions/" + currentAuctionId + "/bids", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ bidderId: "race-low", amount: base + 20 }),
+        }),
+      ]);
+      await refreshState();
+      await refreshBidList();
+    });
+
+    refreshAuctionList();
+    setInterval(refreshAuctionList, 4000);
+  </script>
+</body>
+</html>
