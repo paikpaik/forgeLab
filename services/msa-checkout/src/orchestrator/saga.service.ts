@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectDataSource } from "@paikpaik/node-forge/database/nestjs";
 import { DataSource, Not, In } from "typeorm";
+import { getRequestContext, generateTraceId, runWithRequestContext } from "@paikpaik/node-forge/core";
 import { SagaInstanceEntity, SagaStatus } from "./entities/saga-instance.entity";
 import { ORDER_CLIENT } from "./clients/order-client";
 import type { OrderClient } from "./clients/order-client";
 import { INVENTORY_CLIENT } from "./clients/inventory-client";
 import type { InventoryClient } from "./clients/inventory-client";
+import { TraceRecorderService } from "../shared/trace-recorder";
 
 const TERMINAL_STATUSES: SagaStatus[] = ["CONFIRMED", "CANCELLED", "FAILED"];
 
@@ -21,6 +23,7 @@ export interface SagaView {
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
+  traceId: string | null;
 }
 
 @Injectable()
@@ -31,11 +34,16 @@ export class SagaService {
     @InjectDataSource() private readonly dataSource: DataSource,
     @Inject(ORDER_CLIENT) private readonly orderClient: OrderClient,
     @Inject(INVENTORY_CLIENT) private readonly inventoryClient: InventoryClient,
+    private readonly traceRecorder: TraceRecorderService,
   ) {}
 
   async startCheckout(userId: string, productId: string, quantity: number): Promise<string> {
     const id = randomUUID();
     const now = new Date().toISOString();
+    // gateway→orchestrator StartCheckout까지는 원래 HTTP 요청과 같은 실행 체인이라
+    // getRequestContext()가 그 traceId를 그대로 돌려준다 — 이걸 saga에 영속화해두면,
+    // 나중에 폴러가 비동기로 이 saga를 집어갈 때 같은 트레이스로 다시 이어붙일 수 있다.
+    const traceId = getRequestContext()?.traceId ?? null;
     await this.dataSource.getRepository(SagaInstanceEntity).save({
       id,
       userId,
@@ -46,6 +54,7 @@ export class SagaService {
       reservationId: null,
       lastError: null,
       updatedAt: now,
+      traceId,
     });
     return id;
   }
@@ -64,6 +73,7 @@ export class SagaService {
       lastError: saga.lastError,
       createdAt: saga.createdAt.toISOString(),
       updatedAt: saga.updatedAt,
+      traceId: saga.traceId,
     };
   }
 
@@ -79,22 +89,40 @@ export class SagaService {
   // 이 함수를 호출하는 폴러는 saga 하나가 실패해도 나머지 saga 처리를 막으면 안 된다
   // (kafka-forge OutboxPublisher가 겪었던 "배치 중 하나 실패 시 전체 중단" 버그를 반복하지
   // 않기 위해 per-saga try/catch는 호출부(SagaProcessorService)의 책임).
+  //
+  // SagaProcessorService의 @Interval 폴러가 호출하는 시점은 원래 HTTP 요청과 실행 체인이
+  // 끊겨 있어(getRequestContext()가 undefined) 트레이스가 자동 전파되지 않는다.
+  // startCheckout()이 저장해둔 traceId로 runWithRequestContext를 다시 열어서 논리적으로
+  // 같은 트레이스에 이어붙인다 — 이 안에서 나가는 gRPC 호출(buildOutgoingTraceMetadata)이
+  // 이 traceId를 실어 나른다.
   async driveStep(saga: SagaInstanceEntity): Promise<void> {
-    switch (saga.status) {
-      case "STARTED":
-        await this.tryOrder(saga);
-        return;
-      case "ORDER_TRIED":
-        await this.tryInventory(saga);
-        return;
-      case "INVENTORY_TRIED":
-        await this.confirmBoth(saga);
-        return;
-      case "COMPENSATING":
-        await this.compensate(saga);
-        return;
-      default:
-        return; // 터미널 상태 — fetchPending이 안 뽑아오지만 방어적으로 no-op
+    const context = { traceId: saga.traceId ?? generateTraceId(), requestId: generateTraceId() };
+    await runWithRequestContext(context, () => this.driveStepInContext(saga));
+  }
+
+  private async driveStepInContext(saga: SagaInstanceEntity): Promise<void> {
+    const start = Date.now();
+    try {
+      switch (saga.status) {
+        case "STARTED":
+          await this.tryOrder(saga);
+          break;
+        case "ORDER_TRIED":
+          await this.tryInventory(saga);
+          break;
+        case "INVENTORY_TRIED":
+          await this.confirmBoth(saga);
+          break;
+        case "COMPENSATING":
+          await this.compensate(saga);
+          break;
+        default:
+          return; // 터미널 상태 — fetchPending이 안 뽑아오지만 방어적으로 no-op
+      }
+      await this.traceRecorder.recordSpan("orchestrator", `drive:${saga.status}`, true, Date.now() - start);
+    } catch (err) {
+      await this.traceRecorder.recordSpan("orchestrator", `drive:${saga.status}`, false, Date.now() - start);
+      throw err;
     }
   }
 

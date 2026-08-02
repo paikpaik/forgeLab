@@ -41,6 +41,13 @@ export class SagaInstanceEntity {
   @Column({ type: "varchar", nullable: true })
   lastError!: string | null;
 
+  // 생성 시점(gateway→orchestrator StartCheckout)의 traceId를 저장해둔다. 실제 order/
+  // inventory 호출은 SagaProcessorService의 폴러가 나중에 비동기로 하기 때문에(원래 HTTP
+  // 요청과 실행 체인이 끊김) getRequestContext()로 자동 전파되지 않는다 — driveStep()이
+  // 이 값으로 runWithRequestContext를 다시 열어서 논리적으로 같은 트레이스에 이어붙인다.
+  @Column({ type: "varchar", nullable: true })
+  traceId!: string | null;
+
   @CreateDateColumn()
   createdAt!: Date;
 

@@ -20,9 +20,12 @@ services:
       # 넘겨 429가 났다(실제 재현 확인). 인가/악의적 폭주 데모 취지는 유지하되, 정상적인
       # 동시 폴링을 감당할 수 있게 여유를 둔다.
       RATE_LIMIT_LIMIT: "120"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     depends_on:
       - orchestrator
       - inventory-service
+      - redis
     restart: unless-stopped
 
   orchestrator:
@@ -46,10 +49,13 @@ services:
       INVENTORY_SERVICE_URL: inventory-service:50053
       SAGA_POLL_INTERVAL_MS: 2000
       LOG_LEVEL: info
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     depends_on:
       - postgres
       - order-service
       - inventory-service
+      - redis
     restart: unless-stopped
 
   order-service:
@@ -69,8 +75,11 @@ services:
       DB_PASSWORD: postgres
       DB_NAME: order_db
       LOG_LEVEL: info
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     depends_on:
       - postgres
+      - redis
     restart: unless-stopped
 
   # 다중 인스턴스 정합성 검증 대상. 호스트 포트를 노출하지 않는다 — `--scale inventory-service=2`로
@@ -92,8 +101,11 @@ services:
       DB_PASSWORD: postgres
       DB_NAME: inventory_db
       LOG_LEVEL: info
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     depends_on:
       - postgres
+      - redis
     restart: unless-stopped
 
   postgres:
@@ -103,6 +115,13 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    restart: unless-stopped
+
+  # 트레이스 스팬(traceId별 서비스/메서드/소요시간) 저장 전용 — 도메인 데이터는 여전히
+  # 전부 Postgres에 있고, Redis는 순수하게 "폴러 경계를 넘어 이어붙인 트레이스"를 조회
+  # 가능하게 보여주기 위한 용도로만 쓴다(services/msa-checkout/ARCHITECTURE.md 참고).
+  redis:
+    image: redis:7-alpine
     restart: unless-stopped
 
 secrets:

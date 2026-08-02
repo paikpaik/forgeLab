@@ -71,6 +71,20 @@
   .stock-row:last-child { border-bottom: none; }
   .stock-num { font-family: ui-monospace, monospace; }
   .stock-num.zero { color: #b42318; font-weight: 700; }
+
+  /* 개발자 콘솔 "트레이스" 탭 — gateway→orchestrator→order/inventory-service 스팬 워터폴 */
+  .trace-row {
+    display: grid; grid-template-columns: 1.5rem 8rem 1fr 3.5rem 4rem 5rem; align-items: center;
+    gap: 0.5rem; padding: 0.3rem 0; border-bottom: 1px dashed var(--panel-border); font-size: 0.78rem;
+  }
+  .trace-row:last-child { border-bottom: none; }
+  .trace-seq { color: var(--panel-faint); text-align: right; }
+  .trace-service { font-weight: 700; }
+  .trace-method { font-family: ui-monospace, monospace; color: var(--panel-muted); }
+  .trace-status.ok { color: #1a7f4b; }
+  .trace-status.fail { color: #b42318; font-weight: 700; }
+  .trace-duration { font-family: ui-monospace, monospace; color: var(--panel-muted); text-align: right; }
+  .trace-at { color: var(--panel-faint); }
 </style>
 </head>
 <body>
@@ -168,6 +182,7 @@
   <script>
     let customerToken = null;
     let adminToken = null;
+    let lastSagaId = null;
     const knownSagaIds = new Set(JSON.parse(localStorage.getItem("msa-checkout-saga-ids") || "[]"));
 
     function persistSagaIds() {
@@ -188,8 +203,64 @@
       streamUrl: "/admin/logs/stream",
       title: "개발자 콘솔",
       logLabel: "로그",
-      tabs: [{ id: "stock", label: "재고/saga 상태", pollMs: 4000, render: renderStockTab }],
+      tabs: [
+        { id: "stock", label: "재고/saga 상태", pollMs: 4000, render: renderStockTab },
+        { id: "trace", label: "트레이스", pollMs: 3000, render: renderTraceTab },
+      ],
     });
+
+    // 개발자 콘솔 "트레이스" 탭 — saga가 폴러 경계를 넘어 이어붙인 하나의 traceId로
+    // gateway→orchestrator→order-service/inventory-service 스팬을 시간순으로 보여준다.
+    // 입력창은 첫 활성화 때만 만들고(폴링마다 새로 그리면 타이핑 중인 값이 날아감), 이후
+    // 폴링은 결과 영역만 갱신한다.
+    async function renderTraceTab(container) {
+      if (!container.querySelector(".trace-input")) {
+        container.innerHTML =
+          '<div class="form-row"><input type="text" class="trace-input" placeholder="sagaId" style="width:16rem">' +
+          '<button class="trace-search-btn">조회</button></div>' +
+          '<div class="trace-result"><div class="hint">sagaId를 입력하고 조회하세요</div></div>';
+        if (lastSagaId) container.querySelector(".trace-input").value = lastSagaId;
+        container.querySelector(".trace-search-btn").addEventListener("click", () => loadTrace(container));
+      }
+      const sagaId = container.querySelector(".trace-input").value.trim();
+      if (sagaId) await loadTrace(container);
+    }
+
+    async function loadTrace(container) {
+      const sagaId = container.querySelector(".trace-input").value.trim();
+      const resultEl = container.querySelector(".trace-result");
+      if (!sagaId) {
+        resultEl.innerHTML = '<div class="hint">sagaId를 입력하세요</div>';
+        return;
+      }
+      const token = customerToken || adminToken;
+      if (!token) {
+        resultEl.innerHTML = '<div class="hint">먼저 로그인하세요</div>';
+        return;
+      }
+
+      const res = await fetch("/admin/traces/" + sagaId, { headers: { authorization: "Bearer " + token } });
+      const body = await res.json();
+      const data = body.data;
+      if (!data || !data.found || data.spans.length === 0) {
+        resultEl.innerHTML = '<div class="hint">아직 스팬이 없습니다 — 체크아웃 직후라면 몇 초 뒤 폴러가 처리하면서 채워집니다</div>';
+        return;
+      }
+
+      resultEl.innerHTML =
+        '<div class="hint" style="margin-top:0">traceId: ' + data.traceId + "</div>" +
+        data.spans
+          .map(
+            (s, i) =>
+              '<div class="trace-row"><span class="trace-seq">' + (i + 1) + "</span>" +
+              '<span class="trace-service">' + s.service + "</span>" +
+              '<span class="trace-method">' + s.method + "</span>" +
+              '<span class="trace-status ' + (s.ok ? "ok" : "fail") + '">' + (s.ok ? "성공" : "실패") + "</span>" +
+              '<span class="trace-duration">' + s.durationMs + "ms</span>" +
+              '<span class="trace-at">' + new Date(s.at).toLocaleTimeString("ko-KR", { hour12: false }) + "</span></div>",
+          )
+          .join("");
+    }
 
     async function issueToken(userId, role) {
       const res = await fetch("/auth/token", {
@@ -244,6 +315,7 @@
       const quantity = Number(document.getElementById("quantity-input").value) || 1;
       const sagaId = await startCheckout(productId, quantity);
       if (sagaId) {
+        lastSagaId = sagaId;
         document.getElementById("last-saga").style.display = "block";
         document.getElementById("last-saga-link").href = "/receipt.html?sagaId=" + sagaId + "&token=" + encodeURIComponent(customerToken);
       }

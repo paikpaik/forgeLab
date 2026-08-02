@@ -35,4 +35,5 @@ message SagaStatusResponse {
   string lastError = 8;
   string createdAt = 9;
   string updatedAt = 10;
+  string traceId = 11;
 }

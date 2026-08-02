@@ -17,6 +17,7 @@ export interface SagaStatusGrpc {
   lastError: string;
   createdAt: string;
   updatedAt: string;
+  traceId: string;
 }
 
 interface CheckoutSagaServiceGrpc {
