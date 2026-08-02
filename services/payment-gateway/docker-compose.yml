@@ -1,0 +1,65 @@
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: services/payment-gateway/Dockerfile
+      secrets:
+        - npm_token
+    command: node dist/app/main.js
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-3600}:3600"
+    environment:
+      PORT: 3600
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: payment_gateway
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      FAKE_PG_URL: http://fake-pg:3601
+      FAKE_PG_TIMEOUT_MS: 3000
+      RECONCILE_INTERVAL_MS: 3000
+      MAX_RECONCILE_ATTEMPTS: 5
+      CIRCUIT_FAILURE_THRESHOLD: 3
+      CIRCUIT_RESET_TIMEOUT_MS: 15000
+    depends_on:
+      - postgres
+      - redis
+      - fake-pg
+
+  # 외부 PG(결제대행사)를 흉내내는 테스트 더블. webhook-relay의 test-receiver와 같은 역할 —
+  # 우리 시스템이 아니라 "밖으로 나가는 호출"이 겪는 실패를 재현하기 위한 전용 프로세스라
+  # 자체 DB 없이 인메모리로 거래 상태를 들고 있는다.
+  fake-pg:
+    build:
+      context: ../..
+      dockerfile: services/payment-gateway/Dockerfile
+      secrets:
+        - npm_token
+    command: node dist/fake-pg/main.js
+    restart: unless-stopped
+    ports:
+      - "${FAKE_PG_PORT:-3601}:3601"
+    environment:
+      PORT: 3601
+      PAYMENT_GATEWAY_URL: http://app:3600
+      ASYNC_RESOLUTION_DELAY_MS: 2000
+      TIMEOUT_SIMULATION_DELAY_MS: 6000
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: payment_gateway
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+secrets:
+  npm_token:
+    environment: NODE_AUTH_TOKEN

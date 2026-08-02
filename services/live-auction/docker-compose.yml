@@ -1,0 +1,43 @@
+services:
+  # 처음부터 다중 인스턴스 전제 — 이 실험의 핵심이 "여러 인스턴스가 Redis pub/sub로
+  # WebSocket 브로드캐스트를 동기화하는가"라서, 브라우저가 각 인스턴스에 직접 붙어볼 수
+  # 있도록(이 랩엔 로드밸런서가 없음) 호스트 포트를 범위로 열어둔다. 기본(1개)은 3500만
+  # 쓰고, `docker compose up -d --scale app=3`으로 늘리면 3501/3502도 자동으로 붙는다.
+  app:
+    build:
+      context: ../..
+      dockerfile: services/live-auction/Dockerfile
+      secrets:
+        - npm_token
+    ports:
+      - "3500-3502:3500"
+    environment:
+      PORT: 3500
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: live_auction
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      AUCTION_CLOSE_INTERVAL_MS: 2000
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: live_auction
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+secrets:
+  npm_token:
+    environment: NODE_AUTH_TOKEN

@@ -23,8 +23,12 @@ forge-lab/
 │   │   └── (api:주문+outbox폴러 + fulfillment:다운스트림컨슈머, 프로세스 2개로 분리)
 │   ├── msa-checkout/          NestJS + gRPC + Postgres (4번째 실험 — API 게이트웨이 인증/인가, gRPC, orchestration saga, 다중 인스턴스 정합성)
 │   │   └── (gateway + orchestrator + order-service + inventory-service×2, 프로세스 4개로 분리)
-│   └── webhook-relay/         NestJS + Postgres + Kafka(Redpanda) + Redis (5번째 실험 — 웹훅 fan-out, 분산 circuit breaker, HMAC 서명)
-│       └── (ingest + delivery-worker×N + test-receiver, 프로세스 3종으로 분리)
+│   ├── webhook-relay/         NestJS + Postgres + Kafka(Redpanda) + Redis (5번째 실험 — 웹훅 fan-out, 분산 circuit breaker, HMAC 서명)
+│   │   └── (ingest + delivery-worker×N + test-receiver, 프로세스 3종으로 분리)
+│   ├── live-auction/          NestJS + Postgres + Redis + WebSocket (6번째 실험 — Redis 분산 락/pub-sub, 다중 인스턴스 실시간 동기화)
+│   │   └── (단일 앱을 처음부터 다중 인스턴스로 스케일, 포트 3500-3502 범위 노출)
+│   └── payment-gateway/       NestJS + Postgres + Redis (7번째 실험 — ForgeHttpClient/분산 서킷브레이커/API 버전 협상, 외부 PG 호출 실패 대응)
+│       └── (app:결제 API+거래조회폴러 + fake-pg:외부 PG 테스트 더블, 프로세스 2개로 분리)
 ├── dashboard/                Fastify, services/* 오케스트레이션 전담
 │   └── public/index.html      탭(Architecture/Issue + 서비스별) + 문서 뷰어
 └── package.json               npm workspaces root
@@ -60,6 +64,10 @@ flowchart TB
         gateway + orchestrator + order-service + inventory-service×2`"]
         S5["`**webhook-relay** : 3400/3401
         ingest + delivery-worker×N + test-receiver`"]
+        S6["`**live-auction** : 3500-3502
+        단일 앱, 다중 인스턴스로 스케일`"]
+        S7["`**payment-gateway** : 3600/3601
+        app + fake-pg(외부 PG 더블)`"]
     end
 
     NF[["`**node-forge / kafka-forge**
@@ -74,6 +82,8 @@ flowchart TB
     DUI ==>|"iframe"| S3
     DUI ==>|"iframe"| S4
     DUI ==>|"iframe"| S5
+    DUI ==>|"iframe"| S6
+    DUI ==>|"iframe"| S7
     U -.->|"서비스 포트 직접 접속"| S1
 
     SVC -.-> NF
@@ -85,7 +95,7 @@ flowchart TB
 
     class U userNode
     class DUI,DAPI,DREG,DDOC dashboardNode
-    class S1,S2,S3,S4 serviceNode
+    class S1,S2,S3,S4,S5,S6,S7 serviceNode
     class NF forgeNode
 ```
 

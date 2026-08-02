@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>라이브 경매 · 중계 화면</title>
+<style>
+  /* 의도적으로 /shared/panel-ui.css를 쓰지 않는다 — panel.html(입찰자 화면)과는 완전히
+     다른, 이 경매가 실제로 중계되는 곳(경매장 전광판/방송 화면 톤)을 보여주는 별도
+     데모다. 순수하게 WebSocket 구독만으로 구동된다(REST 폴링 없음). */
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: #0a0a12;
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif; color: #fff;
+  }
+  body { display: flex; align-items: center; justify-content: center; padding: 2rem; }
+
+  .board {
+    width: min(34rem, 100%); background: linear-gradient(160deg, rgba(40, 10, 60, 0.9), rgba(10, 10, 20, 0.95));
+    border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 20px; padding: 2rem 2.2rem;
+    text-align: center; box-shadow: 0 0 50px rgba(160, 60, 220, 0.2);
+  }
+  .live-badge {
+    display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; font-weight: 700;
+    color: #ff5470; background: rgba(255, 84, 112, 0.12); padding: 0.25rem 0.7rem; border-radius: 999px;
+    margin-bottom: 1rem;
+  }
+  .live-dot { width: 0.5rem; height: 0.5rem; border-radius: 999px; background: #ff5470; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+  .title { font-size: 1.3rem; font-weight: 900; margin: 0 0 0.4rem; }
+  .price-label { font-size: 0.85rem; color: rgba(255, 255, 255, 0.55); text-transform: uppercase; letter-spacing: 0.06em; }
+  .price {
+    font-size: 3.6rem; font-weight: 900; color: #9cffcf; margin: 0.3rem 0; font-variant-numeric: tabular-nums;
+    transition: transform 0.25s ease;
+  }
+  .price.flash { transform: scale(1.08); color: #ffe680; }
+  .bidder { color: rgba(255, 255, 255, 0.7); font-size: 0.95rem; }
+  .countdown { margin-top: 1.2rem; font-size: 1rem; color: #c9c1ff; }
+  .countdown b { font-variant-numeric: tabular-nums; }
+
+  .sold-banner {
+    display: none; margin-top: 1.2rem; padding: 1rem; border-radius: 12px;
+    background: linear-gradient(135deg, #ffcd3c, #ff8a3c); color: #241000; font-weight: 900; font-size: 1.2rem;
+  }
+  .sold-banner.show { display: block; animation: pop 0.4s ease; }
+  @keyframes pop { 0% { transform: scale(0.85); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+
+  #loading { color: rgba(255, 255, 255, 0.6); }
+</style>
+</head>
+<body>
+  <div class="board">
+    <div id="loading">경매 정보를 불러오는 중…</div>
+    <div id="content" style="display:none">
+      <div class="live-badge"><span class="live-dot"></span>LIVE 경매 중계</div>
+      <div class="title" id="title"></div>
+      <div class="price-label">현재가</div>
+      <div class="price" id="price">-</div>
+      <div class="bidder" id="bidder"></div>
+      <div class="countdown" id="countdown"></div>
+      <div class="sold-banner" id="sold-banner"></div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const auctionId = params.get("auctionId") || "";
+    let state = null;
+
+    async function loadInitial() {
+      if (!auctionId) return;
+      const res = await fetch("/auctions/" + auctionId);
+      const body = await res.json();
+      state = body.data;
+      if (!state) return;
+      document.getElementById("loading").style.display = "none";
+      document.getElementById("content").style.display = "block";
+      render();
+    }
+
+    function render() {
+      document.getElementById("title").textContent = state.title;
+      document.getElementById("price").textContent = state.currentHighestBid.toLocaleString("ko-KR") + "원";
+      document.getElementById("bidder").textContent = state.currentHighestBidderId
+        ? "최고 입찰자: " + state.currentHighestBidderId
+        : "아직 입찰이 없습니다";
+
+      const sold = document.getElementById("sold-banner");
+      if (state.status === "ENDED") {
+        sold.textContent = "🎉 낙찰! " + (state.winnerId || "-") + " · " + state.finalPrice.toLocaleString("ko-KR") + "원";
+        sold.classList.add("show");
+        document.getElementById("countdown").textContent = "";
+      }
+    }
+
+    function flashPrice() {
+      const el = document.getElementById("price");
+      el.classList.add("flash");
+      setTimeout(() => el.classList.remove("flash"), 300);
+    }
+
+    setInterval(() => {
+      if (!state || state.status === "ENDED") return;
+      const remainingMs = new Date(state.endsAt).getTime() - Date.now();
+      const el = document.getElementById("countdown");
+      el.innerHTML = remainingMs <= 0 ? "마감 처리 중…" : "마감까지 <b>" + Math.ceil(remainingMs / 1000) + "초</b>";
+    }, 1000);
+
+    const socket = io();
+    socket.on("connect", () => {
+      if (auctionId) socket.emit("join", { auctionId });
+    });
+    socket.on("bid-placed", (data) => {
+      if (!state) return;
+      state.currentHighestBid = data.amount;
+      state.currentHighestBidderId = data.bidderId;
+      render();
+      flashPrice();
+    });
+    socket.on("auction-ended", (data) => {
+      if (!state) return;
+      state.status = "ENDED";
+      state.winnerId = data.winnerId;
+      state.finalPrice = data.finalPrice;
+      render();
+    });
+
+    loadInitial();
+  </script>
+</body>
+</html>
