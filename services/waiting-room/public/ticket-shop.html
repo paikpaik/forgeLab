@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>2026 여름밤 콘서트 · 티켓 예매</title>
+<style>
+  /* 의도적으로 /shared/panel-ui.css를 쓰지 않는다 — panel.html(대기열 관리 화면)과는 완전히
+     다른, 이 대기열이 실제로 지키고 있는 "진짜 목적지"를 실제 티켓 판매 사이트처럼 보여주는
+     별도 데모 앱이다. waiting-room의 admission 토큰이 실제로 무언가에 쓰인다는 걸 증명한다. */
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: #f5f5f7; color: #1d1d1f; min-height: 100vh;
+  }
+  .top-bar { background: #1d1d1f; color: #fff; padding: 0.6rem 1.2rem; font-size: 0.8rem; font-weight: 700; }
+
+  #gate { max-width: 30rem; margin: 4rem auto; text-align: center; padding: 0 1rem; }
+  #gate.hidden, #shop.hidden { display: none; }
+  #gate .spinner { font-size: 1rem; color: #6b7280; }
+  #gate .denied h2 { color: #d1293d; }
+  #gate a { color: #0071e3; }
+
+  .hero {
+    background: linear-gradient(135deg, #2b1055, #7597de); color: #fff; padding: 3rem 1.5rem; text-align: center;
+  }
+  .hero h1 { margin: 0 0 0.4rem; font-size: 1.7rem; }
+  .hero p { margin: 0; opacity: 0.85; font-size: 0.9rem; }
+
+  .shop-body { max-width: 40rem; margin: 0 auto; padding: 1.5rem 1.2rem 3rem; }
+  .countdown {
+    background: #fff4e0; color: #9a6400; border-radius: 8px; padding: 0.6rem 1rem;
+    text-align: center; font-size: 0.85rem; margin-bottom: 1.2rem;
+  }
+  .countdown b { font-variant-numeric: tabular-nums; }
+
+  .section-title { font-size: 0.85rem; font-weight: 700; color: #6b7280; margin: 1.2rem 0 0.5rem; }
+  .grade-list { display: flex; flex-direction: column; gap: 0.5rem; }
+  .grade-row {
+    display: flex; align-items: center; justify-content: space-between; border: 1px solid #e2e5ea;
+    border-radius: 8px; padding: 0.7rem 1rem; cursor: pointer; background: #fff;
+  }
+  .grade-row.selected { border-color: #0071e3; box-shadow: 0 0 0 1px #0071e3; }
+  .grade-row .price { color: #6b7280; font-size: 0.85rem; }
+
+  .qty-row { display: flex; align-items: center; gap: 0.8rem; margin-top: 0.9rem; }
+  .qty-row button { width: 2rem; height: 2rem; border-radius: 6px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
+
+  .summary { display: flex; justify-content: space-between; margin: 1.4rem 0 0.8rem; font-weight: 700; }
+  .buy-btn {
+    width: 100%; padding: 0.9rem; border: none; border-radius: 8px; background: #0071e3; color: #fff;
+    font-size: 1rem; font-weight: 700; cursor: pointer;
+  }
+  .buy-btn:hover { background: #0060c2; }
+
+  #confirmation { display: none; text-align: center; padding: 2rem 1rem; }
+  #confirmation .check { font-size: 2.5rem; }
+  #confirmation .order-no { font-family: ui-monospace, monospace; color: #6b7280; margin-top: 0.4rem; }
+</style>
+</head>
+<body>
+  <div class="top-bar">🎫 TicketNow (데모)</div>
+
+  <div id="gate">
+    <p class="spinner">입장 권한을 확인하는 중…</p>
+  </div>
+
+  <div id="shop" class="hidden">
+    <div class="hero">
+      <h1>2026 여름밤 콘서트</h1>
+      <p>2026.08.29(토) 19:00 · 잠실 실내체육관</p>
+    </div>
+    <div class="shop-body">
+      <div class="countdown">이 대기열을 통과해 입장했습니다 · 남은 구매 가능 시간 <b id="countdown-timer">5:00</b></div>
+
+      <div id="purchase-form">
+        <div class="section-title">좌석 등급</div>
+        <div class="grade-list" id="grade-list">
+          <div class="grade-row selected" data-price="198000" data-name="VIP석"><span>VIP석</span><span class="price">198,000원</span></div>
+          <div class="grade-row" data-price="154000" data-name="R석"><span>R석</span><span class="price">154,000원</span></div>
+          <div class="grade-row" data-price="99000" data-name="S석"><span>S석</span><span class="price">99,000원</span></div>
+        </div>
+
+        <div class="section-title">매수</div>
+        <div class="qty-row">
+          <button id="qty-minus">−</button>
+          <span id="qty-value">1</span>
+          <button id="qty-plus">+</button>
+        </div>
+
+        <div class="summary"><span>총 결제 금액</span><span id="total-price">198,000원</span></div>
+        <button class="buy-btn" id="buy-btn">구매하기</button>
+      </div>
+
+      <div id="confirmation">
+        <div class="check">✅</div>
+        <h2>구매가 완료되었습니다</h2>
+        <p>대기열을 통과해서 실제로 상품(티켓)을 구매하는 흐름까지 재현했습니다.</p>
+        <p class="order-no" id="order-no"></p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const roomId = params.get("roomId") || "default";
+    const token = params.get("token") || "";
+
+    let selectedPrice = 198000;
+    let selectedName = "VIP석";
+    let qty = 1;
+
+    function renderTotal() {
+      document.getElementById("qty-value").textContent = qty;
+      document.getElementById("total-price").textContent = (selectedPrice * qty).toLocaleString("ko-KR") + "원";
+    }
+
+    document.getElementById("grade-list").addEventListener("click", (event) => {
+      const row = event.target.closest(".grade-row");
+      if (!row) return;
+      document.querySelectorAll(".grade-row").forEach((r) => r.classList.remove("selected"));
+      row.classList.add("selected");
+      selectedPrice = Number(row.getAttribute("data-price"));
+      selectedName = row.getAttribute("data-name");
+      renderTotal();
+    });
+
+    document.getElementById("qty-minus").addEventListener("click", () => {
+      qty = Math.max(1, qty - 1);
+      renderTotal();
+    });
+    document.getElementById("qty-plus").addEventListener("click", () => {
+      qty = Math.min(8, qty + 1);
+      renderTotal();
+    });
+
+    // 실제 결제 API는 이 실험의 스코프 밖이다 — 대기열 뒤에 "진짜로 쓸 수 있는 목적지"가
+    // 있다는 걸 보여주는 게 목적이라, 구매 자체는 클라이언트에서 완결하는 데모로 남긴다.
+    document.getElementById("buy-btn").addEventListener("click", () => {
+      document.getElementById("purchase-form").style.display = "none";
+      document.getElementById("confirmation").style.display = "block";
+      document.getElementById("order-no").textContent =
+        "주문번호 " + Math.random().toString(36).slice(2, 10).toUpperCase() + " · " + selectedName + " " + qty + "매";
+    });
+
+    // waiting-room의 ADMITTED_TOKEN_TTL_SECONDS(기본 300초)에 맞춘 근사 카운트다운 —
+    // 서버가 실제로 토큰을 만료시키는 시점을 프론트가 정확히 알 방법은 없어서(발급 시각을
+    // 전달받지 않음), 페이지 진입 시점부터 5분을 세는 걸로 실제 UX만 재현한다. 진짜 만료
+    // 여부는 항상 서버의 verify 응답이 기준이다.
+    let remaining = 300;
+    setInterval(() => {
+      remaining = Math.max(0, remaining - 1);
+      const m = Math.floor(remaining / 60);
+      const s = String(remaining % 60).padStart(2, "0");
+      document.getElementById("countdown-timer").textContent = m + ":" + s;
+    }, 1000);
+
+    async function checkEntry() {
+      if (!token) {
+        showDenied("입장 토큰이 없습니다. 대기열에서 순서를 기다려주세요.");
+        return;
+      }
+      try {
+        const res = await fetch("/rooms/" + roomId + "/waiting-users/verify", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+        const body = await res.json();
+        if (body.data && body.data.valid) {
+          document.getElementById("gate").classList.add("hidden");
+          document.getElementById("shop").classList.remove("hidden");
+          renderTotal();
+        } else {
+          showDenied("입장 권한이 없거나 만료되었습니다.");
+        }
+      } catch (e) {
+        showDenied("확인 중 오류가 발생했습니다.");
+      }
+    }
+
+    function showDenied(message) {
+      document.getElementById("gate").innerHTML =
+        '<div class="denied"><h2>입장할 수 없습니다</h2><p>' + message + '</p><p><a href="/panel.html">← 대기열로 돌아가기</a></p></div>';
+    }
+
+    checkEntry();
+  </script>
+</body>
+</html>

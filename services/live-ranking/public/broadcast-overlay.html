@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>실시간 랭킹 · 방송 오버레이</title>
+<style>
+  /* 의도적으로 /shared/panel-ui.css를 쓰지 않는다 — panel.html(운영자용 관리 화면)과는
+     완전히 다른, 이 랭킹이 실제로 쓰이는 곳(e스포츠/게임 방송 송출용 리더보드 오버레이,
+     OBS 브라우저 소스로 그대로 얹을 수 있는 톤)을 보여주는 별도 데모다. */
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: #05050a;
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif; color: #fff;
+  }
+  body { display: flex; align-items: center; justify-content: center; padding: 2rem; }
+
+  .overlay {
+    width: min(30rem, 100%); background: linear-gradient(160deg, rgba(20, 10, 40, 0.92), rgba(5, 5, 15, 0.92));
+    border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; padding: 1.4rem 1.6rem;
+    box-shadow: 0 0 40px rgba(120, 60, 220, 0.25);
+  }
+
+  .overlay-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.2rem; }
+  .overlay-title { font-size: 1rem; font-weight: 900; letter-spacing: 0.04em; text-transform: uppercase; color: #d9c9ff; }
+  .live-badge {
+    display: flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; font-weight: 700;
+    color: #ff5470; background: rgba(255, 84, 112, 0.12); padding: 0.25rem 0.6rem; border-radius: 999px;
+  }
+  .live-dot { width: 0.5rem; height: 0.5rem; border-radius: 999px; background: #ff5470; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+  .rows { display: flex; flex-direction: column; gap: 0.5rem; }
+  .row {
+    display: grid; grid-template-columns: 2.2rem 1fr auto; align-items: center; gap: 0.8rem;
+    padding: 0.55rem 0.8rem; border-radius: 10px; background: rgba(255, 255, 255, 0.04);
+    transition: background 0.4s ease;
+  }
+  .row.rank-1 { background: linear-gradient(90deg, rgba(255, 205, 60, 0.22), rgba(255, 255, 255, 0.04)); }
+  .row.rank-2 { background: linear-gradient(90deg, rgba(200, 210, 225, 0.18), rgba(255, 255, 255, 0.04)); }
+  .row.rank-3 { background: linear-gradient(90deg, rgba(205, 140, 90, 0.18), rgba(255, 255, 255, 0.04)); }
+  .row.flash { background: rgba(120, 220, 160, 0.35); }
+
+  .rank-num { font-weight: 900; font-size: 1.1rem; color: #c9c1ff; text-align: center; }
+  .row.rank-1 .rank-num { color: #ffcd3c; }
+  .row.rank-2 .rank-num { color: #d7dee8; }
+  .row.rank-3 .rank-num { color: #e0a56b; }
+  .player-name { font-weight: 700; font-size: 0.95rem; }
+  .player-score { font-variant-numeric: tabular-nums; font-weight: 900; font-size: 1rem; color: #9cffcf; }
+
+  .empty { text-align: center; color: rgba(255, 255, 255, 0.5); font-size: 0.85rem; padding: 1rem 0; }
+</style>
+</head>
+<body>
+  <div class="overlay">
+    <div class="overlay-header">
+      <span class="overlay-title">🏆 LIVE RANKING</span>
+      <span class="live-badge"><span class="live-dot"></span>LIVE</span>
+    </div>
+    <div class="rows" id="rows"><div class="empty">집계 중…</div></div>
+  </div>
+
+  <script>
+    const LEADERBOARD_ID = "default";
+    let previousScores = {};
+
+    async function refresh() {
+      const res = await fetch("/leaderboards/" + LEADERBOARD_ID + "/top?limit=5");
+      const body = await res.json();
+      const entries = body.data ?? [];
+
+      const rows = document.getElementById("rows");
+      if (entries.length === 0) {
+        rows.innerHTML = '<div class="empty">아직 랭킹에 아무도 없습니다</div>';
+        return;
+      }
+
+      rows.innerHTML = entries
+        .map((entry) => {
+          const changed = previousScores[entry.userId] !== undefined && previousScores[entry.userId] !== entry.score;
+          return (
+            '<div class="row rank-' + entry.rank + (changed ? " flash" : "") + '">' +
+            '<div class="rank-num">' + entry.rank + "</div>" +
+            '<div class="player-name">' + entry.userId + "</div>" +
+            '<div class="player-score">' + entry.score.toLocaleString("ko-KR") + "</div>" +
+            "</div>"
+          );
+        })
+        .join("");
+
+      const nextScores = {};
+      entries.forEach((entry) => { nextScores[entry.userId] = entry.score; });
+      previousScores = nextScores;
+
+      // flash 클래스는 다음 폴링 전에 한 번만 반짝이면 되므로 잠깐 뒤 벗겨낸다.
+      setTimeout(() => {
+        rows.querySelectorAll(".flash").forEach((el) => el.classList.remove("flash"));
+      }, 700);
+    }
+
+    refresh();
+    setInterval(refresh, 1500);
+  </script>
+</body>
+</html>

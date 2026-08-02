@@ -336,3 +336,27 @@ msa-checkout에는 SSE를 확산하지 않기로 함 — saga 전이가 orchestr
 kafka-forge는 그걸 일부러 모르게 설계돼 있어서(스토리지/도메인 비의존 원칙), 이 원자화는
 node-forge/kafka-forge에 제안할 수 있는 성격이 아니라 소비 서비스가 직접 구현해야 하는
 부분이라고 판단 — 제안서 없이 로컬로 완결.
+
+### 후속 (2026-08-02) — 실사용 페르소나 화면 + 개발자 콘솔 + broadcast-overlay.html(실제 목적지 데모)
+
+webhook-relay → waiting-room 순으로 확립한 "메인 화면은 실사용 페르소나만, 시스템 로그/
+원시 상태는 개발자 콘솔로, 이 시스템이 실제로 쓰이는 곳은 완전히 별도 스타일의 데모 앱으로"
+컨벤션(`.claude/rules/project/convention.md`)을 세 번째로 이 서비스에 적용
+(`.claude-plans/20260802/live-ranking-persona-split.md`). 백엔드는 전혀 건드리지 않고
+`public/` 정적 파일만 변경/추가했다.
+
+- `panel.html`을 "게임 플레이어" 페르소나로 재구성: 헤더 바 + "내 순위" 히어로(참가하기/
+  +10점 버튼, 큰 순위·점수 표시) + 전체 랭킹 보드만 메인에 남기고, 이벤트 시뮬레이션(봇
+  버스트)/멱등성 확인/크래시 윈도우 재현/DLQ 유발/초기화는 전부 "테스트 도구" 모달로 이동.
+  이벤트 로그는 `PanelUI.mountDevConsole`(로그 탭 + "DLQ" 탭, 3초 폴링)로 옮겨 메인 화면에서
+  걷어냈다
+- **신규 `public/broadcast-overlay.html`** — webhook-relay의 `channel.html`/waiting-room의
+  `ticket-shop.html`에 대응하는, "이 랭킹이 실제로 쓰이는 곳"을 보여주는 완전히 다른
+  스타일(e스포츠/게임 방송 송출용 리더보드 오버레이, OBS 브라우저 소스로 그대로 얹을 수
+  있는 톤)의 데모. 어두운 그라디언트 배경, LIVE 펄스 배지, top1~3 골드/실버/브론즈 강조,
+  순위 변경 시 flash 하이라이트. 기존 `GET /leaderboards/:id/top?limit=5`를 1.5초 폴링으로
+  그대로 재사용 — 새 API 없음
+
+**검증(2026-08-02)**: 유닛 테스트 22개 회귀 없음. Docker 재빌드(aggregator만)·재기동 후
+curl로 이벤트 발행 → `top` API(limit=10/limit=5 둘 다) 정확히 반영되는 것 확인, `/admin/dlq`
+응답도 재확인.

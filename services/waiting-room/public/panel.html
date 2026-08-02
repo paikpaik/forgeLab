@@ -5,78 +5,127 @@
 <title>waiting-room</title>
 <link rel="stylesheet" href="/shared/panel-ui.css" />
 <style>
-  /* 카드/버튼/폼/로그/가이드 공통 스타일은 /shared/panel-ui.css 참고.
-     여기는 waiting-room 고유 요소(내 티켓/대기열 그리드)만 남긴다. */
-  .my-ticket-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-  .my-status .big { font-size: 1.6rem; font-weight: 700; }
-  .my-status.admitted .big { color: #1a7f4b; }
-  .my-status.waiting .big { color: #b1690a; }
-  .my-status.expired .big { color: #9ca3af; }
-  .my-status .sub { color: #6b7280; font-size: 0.85rem; }
+  /* 카드/버튼/폼/로그/가이드/개발자콘솔 공통 스타일은 /shared/panel-ui.css 참고.
+     메인 화면은 실제 온라인 티켓팅 대기열 키오스크 페르소나만 남긴다 — 부하 시뮬레이션/
+     초기화 같은 테스트 도구는 모달로, 원시 로그/대기열 데이터는 개발자 콘솔로 옮겼다. */
+  body { padding: 0; }
+  #app-main { padding: 1.5rem; }
 
-  .queue-summary { font-size: 0.85rem; color: #6b7280; margin-bottom: 0.75rem; }
-  .queue-summary strong { color: #1f2430; font-size: 1.1rem; }
+  .app-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.9rem 1.5rem; border-bottom: 1px solid var(--panel-border);
+  }
+  .app-brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; font-size: 1rem; }
+  .app-logo { font-size: 1.3rem; }
+  .app-header-right { display: flex; align-items: center; gap: 0.7rem; }
+  .queue-chip {
+    font-size: 0.78rem; padding: 0.3rem 0.7rem; border-radius: 999px;
+    background: var(--panel-card-bg); border: 1px solid var(--panel-border); color: var(--panel-muted);
+  }
+  .tools-link { font-size: 0.78rem; color: var(--panel-muted); }
+
+  .ticket-stub {
+    border: 2px dashed var(--panel-input-border); border-radius: 10px; padding: 1.4rem;
+    text-align: center; max-width: 22rem; margin: 0 auto;
+  }
+  .ticket-stub .big { font-size: 2.3rem; font-weight: 900; line-height: 1.2; }
+  .ticket-stub.admitted .big { color: #1a7f4b; }
+  .ticket-stub.waiting .big { color: #b1690a; }
+  .ticket-stub.expired .big { color: #9ca3af; }
+  .ticket-stub .sub { color: var(--panel-muted); font-size: 0.85rem; margin-top: 0.3rem; }
+  .hero-actions { display: flex; justify-content: center; gap: 0.6rem; margin-top: 1rem; }
+
+  .queue-summary { font-size: 0.85rem; color: var(--panel-muted); margin-bottom: 0.75rem; }
+  .queue-summary strong { color: var(--panel-fg); font-size: 1.1rem; }
   .queue-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; }
   .ticket {
-    width: 2.6rem; height: 2.6rem; border-radius: 6px; background: #ffffff;
-    border: 1px solid #d1d5db; display: flex; align-items: center; justify-content: center;
-    font-size: 0.75rem; color: #6b7280;
+    width: 2.6rem; height: 2.6rem; border-radius: 6px; background: var(--panel-bg);
+    border: 1px solid var(--panel-input-border); display: flex; align-items: center; justify-content: center;
+    font-size: 0.75rem; color: var(--panel-muted);
   }
   .ticket.front { background: #fff4e0; border-color: #e0a030; color: #9a6400; font-weight: 700; }
   .ticket.mine { background: #e6f4ea; border-color: #1a7f4b; color: #1a7f4b; font-weight: 700; }
-  .queue-more { display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 0.75rem; padding: 0 0.5rem; }
+  .queue-more { display: flex; align-items: center; justify-content: center; color: var(--panel-faint); font-size: 0.75rem; padding: 0 0.5rem; }
 
-  /* 공통 form-row/label/hint/log/guide 폭 외 페이지 고유 폭만 여기서 지정 */
-  input[type="number"] { width: 5.5rem; }
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 900;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px;
+    padding: 1.25rem 1.4rem; width: min(24rem, 90vw); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  }
+  .modal h3 { margin: 0 0 0.9rem; font-size: 1rem; }
+  .modal label { display: block; font-size: 0.8rem; color: var(--panel-muted); margin-bottom: 0.7rem; }
+  .modal label > input { display: block; width: 100%; margin-top: 0.3rem; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.3rem; }
+
+  /* 개발자 콘솔 "대기열 원시 상태" 탭 */
+  .raw-row {
+    display: grid; grid-template-columns: 4rem 1fr; gap: 0.6rem;
+    font-size: 0.78rem; padding: 0.25rem 0; border-bottom: 1px dashed var(--panel-border);
+  }
+  .raw-row:last-child { border-bottom: none; }
+  .raw-row .detail { color: var(--panel-muted); font-family: ui-monospace, monospace; }
 </style>
 </head>
 <body>
-  <h1>waiting-room · 대기열 패널</h1>
+  <header class="app-header">
+    <div class="app-brand"><span class="app-logo">🎟️</span><span class="app-name">가상 대기열</span></div>
+    <div class="app-header-right">
+      <span class="queue-chip" id="queue-chip">대기 인원 -명</span>
+      <a href="#" class="tools-link" id="open-tools-btn">테스트 도구</a>
+    </div>
+  </header>
 
-  <div class="grid">
-    <div class="card">
+  <main id="app-main">
+    <section class="card full">
       <h2>내 티켓</h2>
-      <div class="my-ticket-row">
+      <div class="ticket-stub" id="my-status">
+        <div class="sub">아직 줄을 서지 않았습니다</div>
+      </div>
+      <div class="hero-actions">
         <button class="primary" id="join-btn">줄서기</button>
-        <div class="my-status" id="my-status"><span class="sub">아직 줄을 서지 않았습니다</span></div>
+        <a class="primary" id="enter-link" style="display:none;text-decoration:none;padding:0.5rem 1rem;border-radius:6px;" target="_blank" rel="noopener">입장하기 →</a>
       </div>
-    </div>
+    </section>
 
-    <div class="card">
-      <h2>부하 시뮬레이션</h2>
-      <p class="hint" style="margin-top:0">콘서트 예매처럼 짧은 시간에 등록이 몰리는 상황을 재현합니다.</p>
-      <div class="form-row">
-        <label>인원 <input type="number" id="burst-count" value="30" min="1" max="500"></label>
-        <label>분산(ms) <input type="number" id="burst-duration" value="2000" min="0"></label>
-        <button id="burst-btn">한번에 등록</button>
-        <button class="danger" id="burst-stop-btn" style="display:none">중지</button>
-        <button class="danger" id="reset-btn">초기화</button>
-      </div>
-      <div class="hint" id="burst-log"></div>
-    </div>
-
-    <div class="card full">
-      <h2>전체 대기열</h2>
+    <section class="card full">
+      <h2>대기열 미리보기</h2>
       <div class="queue-summary">대기 인원: <strong id="queue-count">-</strong>명</div>
       <div class="queue-grid" id="queue-grid"></div>
-    </div>
+    </section>
 
-    <div class="card full">
-      <h2>이벤트 로그</h2>
-      <div class="log" id="event-log"><div class="empty">아직 이벤트가 없습니다</div></div>
-    </div>
-
-    <div class="card full guide">
-      <h2>테스트 방법</h2>
+    <section class="card full guide">
+      <h2>둘러보기</h2>
       <ol>
-        <li><strong>순서/폴링 확인</strong> — "줄서기"를 누르면 <code>me-xxxxx</code> 형태의 유저로 즉시 등록됩니다. 내 티켓 카드의 숫자가 몇 번째인지, 전체 대기열 그리드의 초록 칸(내 티켓)이 어디 있는지 1초마다 갱신되는 걸 확인하세요.</li>
-        <li><strong>admission 확인</strong> — 서버는 기본 5초마다 앞쪽 10명을 자동으로 입장 허용 처리합니다(<code>ADMISSION_INTERVAL_MS</code>/<code>ADMISSION_BATCH_SIZE</code> 환경변수). 잠시 기다리면 대기 인원이 계단식으로 줄고, 내 티켓이 "입장 가능!"으로 바뀌는 걸 볼 수 있습니다.</li>
-        <li><strong>버스트(동시 접속) 확인</strong> — 인원수(예: 50)와 분산시간(예: 0ms = 완전 동시, 2000ms = 2초에 걸쳐 분산)을 넣고 "한번에 등록"을 누르세요. 대기 인원이 한 번에 확 쌓였다가, admission 주기마다 정확히 배치 크기만큼 빠지는 걸 이벤트 로그와 그리드로 동시에 확인할 수 있습니다.</li>
-        <li><strong>버스트 중지</strong> — 등록이 끝난 뒤에도 버튼은 "대기열에서 빼기"로 이름이 바뀌며 계속 떠 있습니다. admission이 다 빠질 때까지 기다리기 싫으면 언제든 눌러서 이 버스트가 등록한 사람만 대기열에서 바로 제거하세요("내 티켓"으로 따로 등록한 건 안 지워집니다).</li>
-        <li><strong>중복 등록 에러 확인</strong> — 같은 유저로 "줄서기"를 두 번 시도하면(브라우저 콘솔에서 같은 <code>userId</code>로 POST) <code>E9409</code> 에러가 나는 걸 API 응답으로 확인할 수 있습니다.</li>
-        <li><strong>초기화</strong> — 테스트를 반복하고 싶으면 "초기화" 버튼으로 대기열과 입장 허용 기록을 전부 지우고 처음부터 다시 시작할 수 있습니다.</li>
-        <li><strong>관측 지표</strong> — <a href="/metrics" target="_blank" rel="noopener">/metrics</a>에서 Prometheus 포맷으로 큐 길이(<code>waiting_room_queue_length</code>), 평균 대기시간(<code>waiting_room_wait_time_ms</code>), 누적 admission 수(<code>waiting_room_admissions_total</code>)를 직접 볼 수 있습니다.</li>
+        <li><strong>줄서기</strong> — "줄서기"를 누르면 즉시 티켓을 받고, 내 순번과 전체 대기
+          인원이 실시간으로 갱신됩니다.</li>
+        <li><strong>입장</strong> — 서버가 기본 5초마다 앞쪽 10명을 자동으로 입장 허용
+          처리합니다. 순서가 되면 "입장 가능!"으로 바뀌고 "입장하기" 버튼이 나타나는데,
+          누르면 이 대기열이 실제로 지키고 있는 티켓 구매 페이지(별도 데모 앱)로 넘어갑니다.</li>
+        <li><strong>부하 테스트</strong> — 우측 상단 "테스트 도구"에서 콘서트 예매처럼 짧은
+          시간에 등록이 몰리는 상황을 재현하고, 대기열이 admission 주기마다 계단식으로
+          빠지는 걸 확인할 수 있습니다.</li>
+        <li><strong>개발자 콘솔</strong> — 우측 하단 버튼에서 실시간 로그와 대기열 원시
+          상태(등록 순서 그대로의 userId 목록)를 확인할 수 있습니다. 지표는
+          <a href="/metrics" target="_blank" rel="noopener">/metrics</a>에서 확인하세요.</li>
       </ol>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="tools-modal" hidden>
+    <div class="modal">
+      <h3>테스트 도구</h3>
+      <label>인원 <input type="number" id="burst-count" value="30" min="1" max="500"></label>
+      <label>분산(ms) <input type="number" id="burst-duration" value="2000" min="0"></label>
+      <p class="hint" id="burst-log" style="margin:0 0 0.7rem"></p>
+      <div class="modal-actions">
+        <button class="danger" id="reset-btn">전체 초기화</button>
+        <button class="danger" id="burst-stop-btn" style="display:none">중지</button>
+        <button class="primary" id="burst-btn">한번에 등록</button>
+      </div>
     </div>
   </div>
 
@@ -85,36 +134,50 @@
     const ROOM_ID = "default";
     let myUserId = null;
 
-    const logEvent = PanelUI.createLogger("event-log");
+    function openModal(id) { document.getElementById(id).hidden = false; }
+    function closeModal(id) { document.getElementById(id).hidden = true; }
+    document.querySelectorAll(".modal-backdrop").forEach((backdrop) => {
+      backdrop.addEventListener("click", (event) => { if (event.target === backdrop) closeModal(backdrop.id); });
+    });
+    document.getElementById("open-tools-btn").addEventListener("click", (event) => {
+      event.preventDefault();
+      openModal("tools-modal");
+    });
 
-    // 등록/입장 허용을 폴링 추정이 아니라 서버가 실제로 그 일이 일어나는 순간 SSE로
-    // 흘려보낸 걸로 로그를 채운다(node-forge 1.0.9 AdminEventsModule — order-outbox와
-    // 동일 패턴). 다른 사람의 등록/입장도 실시간으로 보인다.
-    PanelUI.connectSSE("/admin/logs/stream", (data) => {
-      const event = JSON.parse(data);
-      logEvent(event.message, { atIso: event.at });
+    PanelUI.mountDevConsole({
+      streamUrl: "/admin/logs/stream",
+      title: "개발자 콘솔",
+      logLabel: "로그",
+      tabs: [{ id: "queue-state", label: "대기열 원시 상태", pollMs: 2000, render: renderQueueStateTab }],
     });
 
     function renderMyStatus(data) {
       const el = document.getElementById("my-status");
+      const enterLink = document.getElementById("enter-link");
       if (!myUserId) {
-        el.className = "my-status";
-        el.innerHTML = '<span class="sub">아직 줄을 서지 않았습니다</span>';
+        el.className = "ticket-stub";
+        el.innerHTML = '<div class="sub">아직 줄을 서지 않았습니다</div>';
+        enterLink.style.display = "none";
         return;
       }
       if (data.status === "admitted") {
-        el.className = "my-status admitted";
+        el.className = "ticket-stub admitted";
         el.innerHTML = '<div class="big">입장 가능!</div><div class="sub">' + myUserId + "</div>";
+        enterLink.href = "/ticket-shop.html?roomId=" + ROOM_ID + "&token=" + encodeURIComponent(data.token);
+        enterLink.style.display = "inline-block";
       } else if (data.status === "waiting") {
-        el.className = "my-status waiting";
+        el.className = "ticket-stub waiting";
         el.innerHTML =
           '<div class="big">' + data.position + "번째</div><div class=\"sub\">" + myUserId + " · 전체 " + data.queueLength + "명 대기</div>";
+        enterLink.style.display = "none";
       } else if (data.status === "expired") {
-        el.className = "my-status expired";
+        el.className = "ticket-stub expired";
         el.innerHTML = '<div class="big">입장 시간 만료</div><div class="sub">' + myUserId + " — 다시 줄서기가 필요합니다</div>";
+        enterLink.style.display = "none";
       } else {
-        el.className = "my-status";
+        el.className = "ticket-stub";
         el.innerHTML = '<span class="sub">' + myUserId + " — 대기열에 없음</span>";
+        enterLink.style.display = "none";
       }
     }
 
@@ -126,8 +189,7 @@
         body: JSON.stringify({ userId: myUserId }),
       });
       if (!res.ok) {
-        const body = await res.json();
-        logEvent("등록 실패: " + JSON.stringify(body));
+        myUserId = null;
       }
       await refreshMyStatus();
     }
@@ -136,8 +198,8 @@
       await fetch("/admin/rooms/" + ROOM_ID + "/waiting-users", { method: "DELETE" });
       myUserId = null;
       renderMyStatus({});
-      logEvent("대기열 초기화");
       await refreshQueue();
+      closeModal("tools-modal");
     }
 
     async function refreshMyStatus() {
@@ -153,6 +215,7 @@
       const data = body.data ?? { queueLength: 0, waiting: [] };
 
       document.getElementById("queue-count").textContent = data.queueLength;
+      document.getElementById("queue-chip").textContent = "대기 인원 " + data.queueLength + "명";
 
       const grid = document.getElementById("queue-grid");
       const shown = data.waiting.slice(0, 20);
@@ -170,6 +233,19 @@
       }
     }
 
+    // 개발자 콘솔 "대기열 원시 상태" 탭 — 실제 개발자 도구의 상태 패널처럼, 사람이 보는
+    // 티켓 숫자가 아니라 등록 순서 그대로의 원시 목록(userId + position)을 그대로 노출한다.
+    async function renderQueueStateTab(container) {
+      const res = await fetch("/rooms/" + ROOM_ID + "/waiting-users");
+      const body = await res.json();
+      const data = body.data ?? { queueLength: 0, waiting: [] };
+      container.innerHTML =
+        '<div class="hint" style="margin-top:0">전체 ' + data.queueLength + "명</div>" +
+        (data.waiting.length
+          ? data.waiting.map((w) => '<div class="raw-row"><span>' + w.position + '번</span><span class="detail">' + w.userId + "</span></div>").join("")
+          : '<div class="hint">대기 중인 사람이 없습니다</div>');
+    }
+
     // 실행 중인 버스트의 상태(예약된 타이머, 진행 중인 요청)를 들고 있는다 — null이면 실행 중 아님.
     // "한번에 등록"은 전부 setTimeout으로 미리 예약해두는 방식이라, 중지하려면 (1)아직 안 쏜
     // 예약을 clearTimeout으로 취소하고 (2)이미 나간 요청은 AbortController로 중단해야 한다.
@@ -181,13 +257,7 @@
     }
 
     // 중지 = 앞으로의 등록 요청 취소 + "이미 등록된 사람도 대기열에서 뺀다"까지 포함한다
-    // (그냥 멈추기만 하면 admission 배치가 다 처리할 때까지 몇 분씩 대기열에 남아있게 된다 —
-    // 그게 싫어서 만든 버튼이니 등록분도 같이 취소한다). 이미 admission된 사람은 대기열에
-    // 없으니 remove가 그냥 무시한다 — 안전하다. 전체를 지우는 reset()과 달리 이 버스트가
-    // 등록한 사람만 골라서 지우므로 "내 티켓"으로 등록해둔 건 안 건드린다.
-    // 등록 자체는 금방 끝나지만 admission 드레인은 한참 걸리므로, 이 버튼은 등록 중은 물론
-    // 등록이 끝난 뒤(runBurst의 finally)에도 계속 떠 있는다 — 그래야 "등록은 끝났지만
-    // 아직 대기열엔 남아있는" 구간에서도 중지(=제거)할 수 있다.
+    // (그냥 멈추기만 하면 admission 배치가 다 처리할 때까지 몇 분씩 대기열에 남아있게 된다).
     async function stopBurst() {
       if (!burstState) return;
       const state = burstState;
@@ -209,12 +279,11 @@
       const removed = body.data ? body.data.removed : 0;
 
       log.textContent = "중지함 — " + state.done + "/" + state.count + "건 요청 처리됨, 대기열에서 " + removed + "명 제거";
-      logEvent("버스트 중지 — 대기열에서 " + removed + "명 제거함");
       await refreshQueue();
     }
 
     function runBurst() {
-      if (burstState) return; // 이미 실행 중이면 무시
+      if (burstState) return;
 
       const count = Number(document.getElementById("burst-count").value) || 30;
       const durationMs = Number(document.getElementById("burst-duration").value) || 0;
@@ -225,7 +294,6 @@
 
       const log = document.getElementById("burst-log");
       log.textContent = "0/" + count + "명 등록 중…";
-      logEvent(count + "명 버스트 시작 (" + durationMs + "ms에 걸쳐 분산)");
 
       for (let i = 0; i < count; i++) {
         const userId = "burst-" + Date.now() + "-" + i;
@@ -254,12 +322,7 @@
             })
             .finally(() => {
               if (!state.cancelled && state.done === count) {
-                log.textContent =
-                  state.ok + "/" + count + "명 등록 완료 — 아직 대기열에 있습니다. 그만두려면 \"대기열에서 빼기\"를 누르세요.";
-                logEvent(state.ok + "/" + count + "명 버스트 등록 완료 (admission 대기 중)");
-                // 등록은 끝났어도 admission이 다 처리할 때까지 대기열에는 그대로 남아있다.
-                // 여기서 버튼을 숨기면 그 사이에는 중지할 방법이 없어지므로, 등록 완료 후에도
-                // 버튼은 유지하고 역할만 "등록 취소"에서 "대기열에서 빼기"로 바꾼다.
+                log.textContent = state.ok + "/" + count + "명 등록 완료 — 아직 대기열에 있습니다. 그만두려면 \"중지\"를 누르세요.";
                 document.getElementById("burst-stop-btn").textContent = "대기열에서 빼기";
               }
             });

@@ -5,8 +5,22 @@
 <title>msa-checkout</title>
 <link rel="stylesheet" href="/shared/panel-ui.css" />
 <style>
-  /* 카드/버튼/폼/로그/가이드 공통 스타일은 /shared/panel-ui.css 참고.
-     여기는 msa-checkout 고유 요소(토큰 배지/saga 목록/재고 현황)만 남긴다. */
+  /* 카드/버튼/폼/로그/가이드/개발자콘솔 공통 스타일은 /shared/panel-ui.css 참고.
+     메인 화면은 실제 장바구니에서 결제하는 손님 페르소나만 남긴다 — admin 로그인/재고
+     리셋/인가 실패 재현/경쟁 테스트 같은 개발자 검증 도구는 모달로, 로그·재고/saga 원시
+     상태는 개발자 콘솔로 옮겼다. */
+  body { padding: 0; }
+  #app-main { padding: 1.5rem; }
+
+  .app-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.9rem 1.5rem; border-bottom: 1px solid var(--panel-border);
+  }
+  .app-brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; font-size: 1rem; }
+  .app-logo { font-size: 1.3rem; }
+  .app-header-right { display: flex; align-items: center; gap: 0.7rem; }
+  .tools-link { font-size: 0.78rem; color: var(--panel-muted); }
+
   input[type="text"] { width: 9rem; }
   input[type="number"] { width: 5rem; }
 
@@ -14,14 +28,22 @@
   .token-badge.ok { background: #e6f4ea; color: #1a7f4b; }
   .token-badge.none { background: #f3f4f6; color: #9ca3af; }
 
+  .last-saga {
+    border: 2px dashed var(--panel-input-border); border-radius: 10px; padding: 1rem 1.2rem;
+    text-align: center; max-width: 24rem; margin: 1rem auto 0;
+  }
+  .last-saga .sub { color: var(--panel-muted); font-size: 0.85rem; }
+  .last-saga a { display: inline-block; margin-top: 0.5rem; text-decoration: none; padding: 0.4rem 0.9rem; border-radius: 6px; }
+
   .sagas { display: flex; flex-direction: column; gap: 0.4rem; }
   .saga-row {
-    display: grid; grid-template-columns: 8rem 9rem 1fr 6rem; align-items: center;
-    gap: 0.5rem; padding: 0.5rem 0.7rem; border-radius: 6px; border: 1px solid #e2e5ea;
+    display: grid; grid-template-columns: 8rem 9rem 1fr 6rem 4rem; align-items: center;
+    gap: 0.5rem; padding: 0.5rem 0.7rem; border-radius: 6px; border: 1px solid var(--panel-border);
     font-size: 0.82rem;
   }
-  .saga-row .id { font-family: ui-monospace, monospace; color: #6b7280; font-size: 0.75rem; }
-  .saga-row .detail { font-size: 0.75rem; color: #6b7280; }
+  .saga-row .id { font-family: ui-monospace, monospace; color: var(--panel-muted); font-size: 0.75rem; }
+  .saga-row .detail { font-size: 0.75rem; color: var(--panel-muted); }
+  .saga-row a { font-size: 0.75rem; }
 
   .status { padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 700; text-align: center; }
   .status.STARTED, .status.ORDER_TRIED, .status.INVENTORY_TRIED { background: #fff4e0; color: #9a6400; }
@@ -30,77 +52,115 @@
   .status.CANCELLED { background: #f3f4f6; color: #6b7280; }
   .status.FAILED { background: #fde3e1; color: #b42318; }
 
-  .stock-row { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px dashed #e2e5ea; font-size: 0.85rem; }
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 900;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px;
+    padding: 1.25rem 1.4rem; width: min(28rem, 92vw); max-height: 85vh; overflow-y: auto;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  }
+  .modal h3 { margin: 0 0 0.9rem; font-size: 1rem; }
+  .modal h4 { margin: 1.1rem 0 0.5rem; font-size: 0.85rem; color: var(--panel-muted); }
+  .modal h4:first-of-type { margin-top: 0; }
+
+  /* 개발자 콘솔 "재고/saga 상태" 탭 */
+  .stock-row { display: flex; justify-content: space-between; align-items: center; padding: 0.35rem 0; border-bottom: 1px dashed var(--panel-border); font-size: 0.82rem; }
   .stock-row:last-child { border-bottom: none; }
   .stock-num { font-family: ui-monospace, monospace; }
   .stock-num.zero { color: #b42318; font-weight: 700; }
-
-  /* 로그 카드 자체는 공통이지만, 이 패널은 로그가 많이 쌓여서 높이만 살짝 키운다 */
-  .log { max-height: 12rem; }
-  .log .err { color: #b42318; }
 </style>
 </head>
 <body>
-  <h1>msa-checkout · API 게이트웨이 + gRPC + Orchestration Saga 패널</h1>
+  <header class="app-header">
+    <div class="app-brand"><span class="app-logo">🛍</span><span class="app-name">msa 스토어</span></div>
+    <div class="app-header-right">
+      <span class="token-badge none" id="customer-token-badge">로그인 필요</span>
+      <a href="#" class="tools-link" id="open-tools-btn">테스트 도구</a>
+    </div>
+  </header>
 
-  <div class="grid">
-    <div class="card">
-      <h2>로그인 (게이트웨이 인증)</h2>
-      <div class="form-row">
+  <main id="app-main">
+    <section class="card full">
+      <h2>로그인</h2>
+      <div class="form-row" style="justify-content:center">
         <label>userId <input type="text" id="user-id-input" value="alice"></label>
-        <button id="login-customer-btn">고객으로 로그인</button>
-        <span class="token-badge none" id="customer-token-badge">토큰 없음</span>
+        <button class="primary" id="login-customer-btn">고객으로 로그인</button>
       </div>
-      <div class="form-row">
-        <label>userId <input type="text" id="admin-id-input" value="ops"></label>
-        <button id="login-admin-btn">관리자로 로그인</button>
-        <span class="token-badge none" id="admin-token-badge">토큰 없음</span>
-      </div>
-      <p class="hint" style="margin-bottom:0">gateway가 HMAC 서명 토큰을 발급합니다(15분 TTL). 체크아웃은 customer, 재고 강제 리셋은 admin 권한이 필요합니다 — 아래 "인가 실패 재현"으로 권한이 실제로 막히는 것도 확인할 수 있습니다.</p>
-    </div>
+      <p class="hint" style="margin-bottom:0;text-align:center">gateway가 서명 토큰을 발급합니다(15분 TTL).</p>
+    </section>
 
-    <div class="card">
-      <h2>재고 현황</h2>
-      <div id="stock-list"></div>
-      <div class="form-row" style="margin-top:0.6rem">
-        <button class="danger" id="reset-scarce-btn">widget-scarce 재고를 1로 리셋 (admin)</button>
-        <button id="unauthorized-btn">인가 실패 재현 (customer로 리셋 시도)</button>
-      </div>
-    </div>
-
-    <div class="card full">
+    <section class="card full">
       <h2>체크아웃</h2>
-      <div class="form-row">
+      <div class="form-row" style="justify-content:center">
         <label>상품 <select id="product-select">
           <option value="widget-plenty">widget-plenty (재고 넉넉)</option>
           <option value="widget-scarce">widget-scarce (재고 1개 — 경쟁 테스트용)</option>
         </select></label>
         <label>수량 <input type="number" id="quantity-input" value="1" min="1" max="1000"></label>
         <button class="primary" id="checkout-btn">체크아웃</button>
-        <button class="danger" id="race-btn">widget-scarce 동시 체크아웃 2건 발사 (다중 인스턴스 경쟁 테스트)</button>
       </div>
-      <p class="hint" style="margin-bottom:0">주문(order-service)과 재고 예약(inventory-service, 2개 인스턴스)을 gRPC로 순차 호출하는 orchestration saga입니다. "동시 발사" 버튼은 재고 1개인 상품에 요청 2건을 거의 동시에 보내서, 어느 inventory-service 인스턴스가 받든 정확히 1건만 성공하는지 확인합니다.</p>
-    </div>
+      <div class="last-saga" id="last-saga" style="display:none">
+        <div class="sub">체크아웃이 접수됐습니다</div>
+        <a class="primary" id="last-saga-link" target="_blank" rel="noopener">영수증 보기 →</a>
+      </div>
+      <p class="hint" style="margin-bottom:0;text-align:center">
+        주문(order-service)과 재고 예약(inventory-service, 2개 인스턴스)을 gRPC로 순차
+        호출하는 orchestration saga입니다. "영수증 보기"에서 진행 상태를 실시간으로 볼 수
+        있습니다.
+      </p>
+    </section>
 
-    <div class="card full">
-      <h2>saga 목록</h2>
+    <section class="card full">
+      <h2>내 주문 내역</h2>
       <div class="sagas" id="saga-list"></div>
-    </div>
+    </section>
 
-    <div class="card full">
-      <h2>이벤트 로그</h2>
-      <div class="log" id="event-log"><div class="empty">아직 이벤트가 없습니다</div></div>
-    </div>
-
-    <div class="card full guide">
-      <h2>테스트 방법</h2>
+    <section class="card full guide">
+      <h2>둘러보기</h2>
       <ol>
-        <li><strong>해피 패스</strong> — 로그인 후 widget-plenty로 체크아웃하면 <span class="status ORDER_TRIED">ORDER_TRIED</span> → <span class="status INVENTORY_TRIED">INVENTORY_TRIED</span> → <span class="status CONFIRMED">CONFIRMED</span> 순서로 몇 초 안에 전이됩니다(orchestrator가 2초 간격 폴링으로 saga를 진행시킵니다).</li>
-        <li><strong>보상 트랜잭션</strong> — widget-scarce 재고를 0으로 만든 뒤(먼저 체크아웃 1건으로 소진시키거나 "리셋"으로 0을 넣고) 다시 체크아웃하면, order Try는 성공하지만 inventory Try가 실패해서 <span class="status COMPENSATING">COMPENSATING</span> → <span class="status CANCELLED">CANCELLED</span>로 갑니다 — 이때 order-service에 실제로 CancelOrder gRPC 호출이 나갑니다.</li>
-        <li><strong>다중 인스턴스 정합성</strong> — "widget-scarce 재고를 1로 리셋" 후 "동시 체크아웃 2건 발사"를 누르면, inventory-service 2개 인스턴스 중 어디로 요청이 가든 정확히 1건만 CONFIRMED로 가고 나머지 1건은 CANCELLED로 갑니다(재고가 마이너스로 내려가지 않음).</li>
-        <li><strong>인가(authorization)</strong> — "인가 실패 재현"을 누르면 customer 토큰으로 admin 전용 리셋을 시도해서 403이 로그에 찍히는 걸 확인할 수 있습니다.</li>
-        <li><strong>각 프로세스의 /health, /metrics</strong> — gateway <a href="/health" target="_blank" rel="noopener">:3300/health</a>, orchestrator <code>:3301/health</code>, order-service <code>:3302/health</code>에서 확인 가능합니다(inventory-service는 호스트 포트를 노출하지 않습니다 — 2인스턴스라 고정 포트 매핑이 불가능해서 내부 네트워크에서만 접근).</li>
+        <li><strong>해피 패스</strong> — 로그인 후 widget-plenty로 체크아웃하면
+          <span class="status ORDER_TRIED">ORDER_TRIED</span> → <span class="status INVENTORY_TRIED">INVENTORY_TRIED</span> →
+          <span class="status CONFIRMED">CONFIRMED</span> 순서로 몇 초 안에 전이됩니다.</li>
+        <li><strong>영수증</strong> — "영수증 보기"를 누르면 이 saga가 실제로 도달하는 곳
+          (결제 완료 영수증/주문확인 페이지)을 별도 창으로 볼 수 있습니다.</li>
+        <li><strong>보상 트랜잭션</strong> — widget-scarce 재고가 0이면 order Try는 성공하지만
+          inventory Try가 실패해서 <span class="status COMPENSATING">COMPENSATING</span> →
+          <span class="status CANCELLED">CANCELLED</span>로 갑니다.</li>
+        <li><strong>테스트 도구</strong> — 우측 상단에서 admin 로그인, 재고 강제 리셋, 인가
+          실패 재현, 다중 인스턴스 경쟁 테스트(동시 체크아웃 2건)를 실행할 수 있습니다.</li>
+        <li><strong>개발자 콘솔</strong> — 우측 하단 버튼에서 실시간 로그(체크아웃 시작/재고
+          리셋)와 재고/saga 원시 상태를 확인할 수 있습니다. 각 프로세스의 /health, /metrics는
+          gateway <a href="/health" target="_blank" rel="noopener">:3300/health</a>,
+          orchestrator <code>:3301/health</code>, order-service <code>:3302/health</code>에서
+          확인 가능합니다(inventory-service는 2인스턴스라 호스트 포트를 노출하지 않습니다).</li>
       </ol>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="tools-modal" hidden>
+    <div class="modal">
+      <h3>테스트 도구</h3>
+
+      <h4>관리자 로그인 + 재고 리셋</h4>
+      <div class="form-row">
+        <label>userId <input type="text" id="admin-id-input" value="ops"></label>
+        <button id="login-admin-btn">관리자로 로그인</button>
+        <span class="token-badge none" id="admin-token-badge">토큰 없음</span>
+      </div>
+      <div class="form-row">
+        <button class="danger" id="reset-scarce-btn">widget-scarce 재고를 1로 리셋 (admin)</button>
+      </div>
+
+      <h4>인가(authorization) 확인</h4>
+      <div class="form-row"><button id="unauthorized-btn">인가 실패 재현 (customer로 리셋 시도)</button></div>
+      <div class="hint" id="unauthorized-log"></div>
+
+      <h4>다중 인스턴스 경쟁 테스트</h4>
+      <p class="hint" style="margin-top:0">widget-scarce에 동시 체크아웃 2건을 발사합니다 — 재고가 1개면 정확히 1건만 성공해야 합니다.</p>
+      <div class="form-row"><button class="danger" id="race-btn">widget-scarce 동시 체크아웃 2건 발사</button></div>
     </div>
   </div>
 
@@ -114,10 +174,22 @@
       localStorage.setItem("msa-checkout-saga-ids", JSON.stringify([...knownSagaIds]));
     }
 
-    const logEventRaw = PanelUI.createLogger("event-log", { max: 80 });
-    function logEvent(text, isError) {
-      logEventRaw(text, isError ? { className: "err" } : undefined);
-    }
+    function openModal(id) { document.getElementById(id).hidden = false; }
+    function closeModal(id) { document.getElementById(id).hidden = true; }
+    document.querySelectorAll(".modal-backdrop").forEach((backdrop) => {
+      backdrop.addEventListener("click", (event) => { if (event.target === backdrop) closeModal(backdrop.id); });
+    });
+    document.getElementById("open-tools-btn").addEventListener("click", (event) => {
+      event.preventDefault();
+      openModal("tools-modal");
+    });
+
+    PanelUI.mountDevConsole({
+      streamUrl: "/admin/logs/stream",
+      title: "개발자 콘솔",
+      logLabel: "로그",
+      tabs: [{ id: "stock", label: "재고/saga 상태", pollMs: 4000, render: renderStockTab }],
+    });
 
     async function issueToken(userId, role) {
       const res = await fetch("/auth/token", {
@@ -142,7 +214,7 @@
       const badge = document.getElementById("customer-token-badge");
       badge.textContent = userId + " (customer)";
       badge.className = "token-badge ok";
-      logEvent("customer 토큰 발급 — userId=" + userId);
+      await refreshSagas();
     });
 
     document.getElementById("login-admin-btn").addEventListener("click", async () => {
@@ -151,46 +223,60 @@
       const badge = document.getElementById("admin-token-badge");
       badge.textContent = userId + " (admin)";
       badge.className = "token-badge ok";
-      logEvent("admin 토큰 발급 — userId=" + userId);
     });
 
     async function startCheckout(productId, quantity) {
-      if (!customerToken) { logEvent("먼저 고객으로 로그인하세요", true); return null; }
+      if (!customerToken) return null;
       const res = await authedFetch("/checkout", customerToken, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ productId, quantity }),
       });
       const body = await res.json();
-      if (!res.ok) { logEvent("체크아웃 실패: " + JSON.stringify(body), true); return null; }
+      if (!res.ok) return null;
       knownSagaIds.add(body.data.sagaId);
       persistSagaIds();
-      logEvent("체크아웃 시작 — " + productId + " x" + quantity + " (saga " + body.data.sagaId.slice(0, 8) + "…)");
       return body.data.sagaId;
     }
 
     document.getElementById("checkout-btn").addEventListener("click", async () => {
       const productId = document.getElementById("product-select").value;
       const quantity = Number(document.getElementById("quantity-input").value) || 1;
-      await startCheckout(productId, quantity);
+      const sagaId = await startCheckout(productId, quantity);
+      if (sagaId) {
+        document.getElementById("last-saga").style.display = "block";
+        document.getElementById("last-saga-link").href = "/receipt.html?sagaId=" + sagaId + "&token=" + encodeURIComponent(customerToken);
+      }
       await refreshSagas();
     });
 
     document.getElementById("race-btn").addEventListener("click", async () => {
-      logEvent("widget-scarce 동시 체크아웃 2건 발사 — 어느 inventory-service 인스턴스가 받든 정확히 1건만 성공해야 합니다");
       await Promise.all([startCheckout("widget-scarce", 1), startCheckout("widget-scarce", 1)]);
       await refreshSagas();
+      closeModal("tools-modal");
     });
+
+    // sagaId별로 마지막에 조회한 상태를 캐시해둔다. CONFIRMED/CANCELLED는 더 이상 바뀌지
+    // 않는 최종 상태라 다시 조회할 이유가 없다 — 여기서 걸러내지 않으면 localStorage에
+    // 쌓인 sagaId 전부(최대 30개)를 1.5초마다 계속 다시 조회하게 되고, gateway의
+    // ThrottlerModule(IP당 60초 20회)에 금방 걸려서 이후 요청이 전부 429가 된다(receipt.html
+    // 등 다른 화면까지 영향받음 — 실제로 재현해서 확인한 문제).
+    const TERMINAL_STATUSES = new Set(["CONFIRMED", "CANCELLED"]);
+    const sagaViewCache = new Map();
 
     async function refreshSagas() {
       if (!customerToken) return;
       const list = document.getElementById("saga-list");
-      const ids = [...knownSagaIds].reverse().slice(0, 30);
-      if (ids.length === 0) { list.innerHTML = '<div class="hint">아직 saga가 없습니다</div>'; return; }
+      const ids = [...knownSagaIds].reverse().slice(0, 10);
+      if (ids.length === 0) { list.innerHTML = '<div class="hint">아직 주문이 없습니다</div>'; return; }
 
-      const views = await Promise.all(
-        ids.map((id) => authedFetch("/checkout/" + id, customerToken).then((r) => r.json()).then((b) => b.data)),
+      const toFetch = ids.filter((id) => !TERMINAL_STATUSES.has((sagaViewCache.get(id) || {}).status));
+      const fetched = await Promise.all(
+        toFetch.map((id) => authedFetch("/checkout/" + id, customerToken).then((r) => r.json()).then((b) => b.data)),
       );
+      fetched.forEach((v, i) => { if (v && v.found) sagaViewCache.set(toFetch[i], v); });
+
+      const views = ids.map((id) => sagaViewCache.get(id));
 
       list.innerHTML = views
         .map((v) => {
@@ -203,21 +289,24 @@
           return (
             '<div class="saga-row"><div class="id">' + v.sagaId.slice(0, 8) + "…</div><div>" +
             v.productId + " x" + v.quantity + '</div><div class="detail">' + detail +
-            '</div><div class="status ' + v.status + '">' + v.status + "</div></div>"
+            '</div><div class="status ' + v.status + '">' + v.status + '</div>' +
+            '<a href="/receipt.html?sagaId=' + v.sagaId + '&token=' + encodeURIComponent(customerToken) + '" target="_blank" rel="noopener">영수증</a></div>'
           );
         })
         .join("");
     }
 
-    async function refreshStock() {
+    async function renderStockTab(container) {
       const token = customerToken || adminToken;
-      if (!token) { document.getElementById("stock-list").innerHTML = '<div class="hint">로그인 후 표시됩니다</div>'; return; }
+      if (!token) {
+        container.innerHTML = '<div class="hint">먼저 로그인하세요</div>';
+        return;
+      }
       const products = ["widget-plenty", "widget-scarce"];
       const results = await Promise.all(
         products.map((p) => authedFetch("/admin/inventory/" + p, token).then((r) => r.json()).then((b) => b.data)),
       );
-      const list = document.getElementById("stock-list");
-      list.innerHTML = results
+      container.innerHTML = results
         .map((s, i) => {
           if (!s || !s.found) return "";
           const zero = s.available <= 0 ? "zero" : "";
@@ -230,35 +319,27 @@
     }
 
     document.getElementById("reset-scarce-btn").addEventListener("click", async () => {
-      if (!adminToken) { logEvent("먼저 관리자로 로그인하세요", true); return; }
-      const res = await authedFetch("/admin/inventory/widget-scarce/reset", adminToken, {
+      if (!adminToken) return;
+      await authedFetch("/admin/inventory/widget-scarce/reset", adminToken, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ total: 1 }),
       });
-      const body = await res.json();
-      logEvent(res.ok ? "widget-scarce 재고를 1로 리셋함" : "리셋 실패: " + JSON.stringify(body), !res.ok);
-      await refreshStock();
     });
 
     document.getElementById("unauthorized-btn").addEventListener("click", async () => {
-      if (!customerToken) { logEvent("먼저 고객으로 로그인하세요", true); return; }
+      if (!customerToken) return;
       const res = await authedFetch("/admin/inventory/widget-scarce/reset", customerToken, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ total: 1 }),
       });
       const body = await res.json();
-      logEvent(
-        "인가 재현 — customer 토큰으로 admin 전용 리셋 시도 → HTTP " + res.status + " " + JSON.stringify(body),
-        !res.ok,
-      );
+      document.getElementById("unauthorized-log").textContent =
+        "customer 토큰으로 admin 전용 리셋 시도 → HTTP " + res.status + " " + JSON.stringify(body);
     });
 
-    refreshStock();
-    refreshSagas();
-    setInterval(refreshStock, 2000);
-    setInterval(refreshSagas, 1500);
+    setInterval(refreshSagas, 2500);
   </script>
 </body>
 </html>

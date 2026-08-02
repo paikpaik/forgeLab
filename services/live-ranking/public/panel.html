@@ -5,105 +5,145 @@
 <title>live-ranking</title>
 <link rel="stylesheet" href="/shared/panel-ui.css" />
 <style>
-  /* 카드/버튼/폼/로그/가이드 공통 스타일은 /shared/panel-ui.css 참고.
-     여기는 live-ranking 고유 요소(랭킹 보드/DLQ 목록)만 남긴다. */
-  .my-score-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-  .my-status .big { font-size: 1.6rem; font-weight: 700; }
-  .my-status .sub { color: #6b7280; font-size: 0.85rem; }
+  /* 카드/버튼/폼/로그/가이드/개발자콘솔 공통 스타일은 /shared/panel-ui.css 참고.
+     메인 화면은 실제 게임/이벤트 리더보드에 참가하는 플레이어 페르소나만 남긴다 —
+     이벤트 시뮬레이션/멱등성 확인/크래시 재현/DLQ 유발 같은 개발자 검증 도구는 모달로,
+     로그·DLQ 원시 목록은 개발자 콘솔로 옮겼다. */
+  body { padding: 0; }
+  #app-main { padding: 1.5rem; }
+
+  .app-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.9rem 1.5rem; border-bottom: 1px solid var(--panel-border);
+  }
+  .app-brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; font-size: 1rem; }
+  .app-logo { font-size: 1.3rem; }
+  .app-header-right { display: flex; align-items: center; gap: 0.7rem; }
+  .board-chip {
+    font-size: 0.78rem; padding: 0.3rem 0.7rem; border-radius: 999px;
+    background: var(--panel-card-bg); border: 1px solid var(--panel-border); color: var(--panel-muted);
+  }
+  .tools-link { font-size: 0.78rem; color: var(--panel-muted); }
+
+  .rank-stub {
+    border: 2px dashed var(--panel-input-border); border-radius: 10px; padding: 1.4rem;
+    text-align: center; max-width: 22rem; margin: 0 auto;
+  }
+  .rank-stub .big { font-size: 2.3rem; font-weight: 900; line-height: 1.2; color: #1a7f4b; }
+  .rank-stub .sub { color: var(--panel-muted); font-size: 0.85rem; margin-top: 0.3rem; }
+  .hero-actions { display: flex; justify-content: center; align-items: center; gap: 0.8rem; margin-top: 1rem; flex-wrap: wrap; }
 
   .board { display: flex; flex-direction: column; gap: 0.4rem; }
   .board-row {
     display: grid; grid-template-columns: 3rem 1fr 5rem; align-items: center;
-    gap: 0.5rem; padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid #e2e5ea;
-    font-size: 0.85rem;
+    gap: 0.5rem; padding: 0.5rem 0.7rem; border-radius: 6px; border: 1px solid var(--panel-border);
+    font-size: 0.85rem; background: var(--panel-bg);
   }
   .board-row.top3 { background: #fff4e0; border-color: #e0a030; }
   .board-row.mine { background: #e6f4ea; border-color: #1a7f4b; font-weight: 700; }
-  .board-row .rank { color: #6b7280; font-weight: 700; }
+  .board-row .rank { color: var(--panel-muted); font-weight: 700; }
   .board-row .score { text-align: right; }
 
-  /* 공통 form-row/label/hint/log/guide 폭 외 페이지 고유 폭만 여기서 지정 */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 900;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px;
+    padding: 1.25rem 1.4rem; width: min(28rem, 92vw); max-height: 85vh; overflow-y: auto;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  }
+  .modal h3 { margin: 0 0 0.9rem; font-size: 1rem; }
+  .modal h4 { margin: 1.1rem 0 0.5rem; font-size: 0.85rem; color: var(--panel-muted); }
+  .modal h4:first-of-type { margin-top: 0; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.3rem; }
+
   input[type="number"] { width: 5.5rem; }
+
+  /* 개발자 콘솔 "DLQ" 탭 */
+  .dlq-row { font-size: 0.78rem; padding: 0.25rem 0; border-bottom: 1px dashed var(--panel-border); }
+  .dlq-row:last-child { border-bottom: none; }
 </style>
 </head>
 <body>
-  <h1>live-ranking · 실시간 랭킹 패널</h1>
-
-  <div class="grid">
-    <div class="card">
-      <h2>내 점수</h2>
-      <div class="my-score-row">
-        <button class="primary" id="join-btn">참가하기</button>
-        <button id="score-btn" style="display:none">+10점 올리기</button>
-        <div class="my-status" id="my-status"><span class="sub">아직 참가하지 않았습니다</span></div>
-      </div>
-      <p class="hint" style="margin-bottom:0">점수는 HTTP로 직접 반영되지 않고, ingest(producer) → Kafka → aggregator(consumer)를 거쳐 Redis에 반영됩니다. 버튼을 누른 직후와 랭킹이 실제로 바뀌는 시점 사이에 약간의 지연이 있는 걸 확인하세요.</p>
+  <header class="app-header">
+    <div class="app-brand"><span class="app-logo">🏆</span><span class="app-name">실시간 랭킹</span></div>
+    <div class="app-header-right">
+      <span class="board-chip" id="board-chip">참가자 -명</span>
+      <a href="#" class="tools-link" id="open-tools-btn">테스트 도구</a>
     </div>
+  </header>
 
-    <div class="card">
-      <h2>이벤트 시뮬레이션</h2>
+  <main id="app-main">
+    <section class="card full">
+      <h2>내 순위</h2>
+      <div class="rank-stub" id="my-status"><div class="sub">아직 참가하지 않았습니다</div></div>
+      <div class="hero-actions">
+        <button class="primary" id="join-btn">참가하기</button>
+        <button class="primary" id="score-btn" style="display:none">+10점 올리기</button>
+        <a class="tools-link" id="overlay-link" href="/broadcast-overlay.html" target="_blank" rel="noopener">📺 방송 화면으로 보기 ↗</a>
+      </div>
+      <p class="hint" style="margin-bottom:0;text-align:center">
+        점수는 ingest(producer) → Kafka → aggregator(consumer)를 거쳐 반영되므로, 버튼을
+        누른 직후와 실제로 순위가 바뀌는 시점 사이에 약간의 지연이 있습니다.
+      </p>
+    </section>
+
+    <section class="card full">
+      <h2>전체 랭킹 (상위 10)</h2>
+      <div class="board" id="board"></div>
+    </section>
+
+    <section class="card full guide">
+      <h2>둘러보기</h2>
+      <ol>
+        <li><strong>참가/점수 올리기</strong> — "참가하기" 후 "+10점 올리기"를 누르면 이벤트가
+          즉시 발행되지만, 전체 랭킹에 실제로 반영되는 건 Kafka consumer가 소비한 다음입니다
+          (보통 1초 안쪽) — 이 발행-반영 사이의 시간차가 이 실험의 핵심입니다.</li>
+        <li><strong>방송 화면</strong> — "📺 방송 화면으로 보기"를 누르면 이 랭킹이 실제로
+          쓰이는 곳(e스포츠/게임 방송 송출용 리더보드 오버레이)을 별도 창으로 볼 수 있습니다.</li>
+        <li><strong>테스트 도구</strong> — 우측 상단 "테스트 도구"에서 다수 봇 시뮬레이션,
+          멱등성 검증, 크래시 윈도우 재현, DLQ(실패 이벤트) 유발, 초기화를 실행할 수 있습니다.</li>
+        <li><strong>개발자 콘솔</strong> — 우측 하단 버튼에서 실시간 로그와 DLQ 원시 목록을
+          확인할 수 있습니다. 지표는 aggregator의
+          <a href="/metrics" target="_blank" rel="noopener">/metrics</a>에서 확인하세요.</li>
+      </ol>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="tools-modal" hidden>
+    <div class="modal">
+      <h3>테스트 도구</h3>
+
+      <h4>이벤트 시뮬레이션</h4>
       <p class="hint" style="margin-top:0">여러 명이 동시에 점수를 올리는 상황을 8명의 봇으로 재현합니다.</p>
       <div class="form-row">
         <label>이벤트 수 <input type="number" id="burst-count" value="50" min="1" max="1000"></label>
         <label>최대 델타 <input type="number" id="burst-max-delta" value="20" min="1" max="1000"></label>
         <button id="burst-btn">한번에 발사</button>
         <button class="danger" id="burst-stop-btn" style="display:none">중지</button>
-        <button class="danger" id="reset-btn">초기화</button>
       </div>
       <div class="hint" id="burst-log"></div>
-    </div>
 
-    <div class="card">
-      <h2>멱등성 확인</h2>
-      <p class="hint" style="margin-top:0">같은 <code>eventId</code>로 이벤트를 두 번 보내도 점수가 한 번만 반영되는지 직접 확인합니다 (Kafka 재배달 시 중복 반영을 막는 멱등성 저장소 검증).</p>
-      <div class="form-row">
-        <button id="idem-btn">같은 이벤트 두 번 보내기</button>
-      </div>
+      <h4>멱등성 확인</h4>
+      <p class="hint" style="margin-top:0">같은 <code>eventId</code>로 이벤트를 두 번 보내도 점수가 한 번만 반영되는지 확인합니다.</p>
+      <div class="form-row"><button id="idem-btn">같은 이벤트 두 번 보내기</button></div>
       <div class="hint" id="idem-log"></div>
-    </div>
 
-    <div class="card">
-      <h2>크래시 윈도우 재현</h2>
-      <p class="hint" style="margin-top:0">이벤트 소비 도중(이펙트 반영 직전) 8초 지연을 둡니다. 그 사이 터미널에서 <code>docker kill live-ranking-aggregator-1</code>로 강제 종료해보세요 — 재시작 후 정확히 한 번만 반영되는지(유실도, 중복도 아님) 확인할 수 있습니다.</p>
-      <div class="form-row">
-        <button id="crash-test-btn">크래시 테스트 이벤트 발사 (+42점)</button>
-      </div>
+      <h4>크래시 윈도우 재현</h4>
+      <p class="hint" style="margin-top:0">이펙트 반영 직전 8초 지연을 둡니다. 그 사이 터미널에서 <code>docker kill live-ranking-aggregator-1</code>로 강제 종료해보세요 — 재시작 후 정확히 한 번만 반영되는지 확인할 수 있습니다.</p>
+      <div class="form-row"><button id="crash-test-btn">크래시 테스트 이벤트 발사 (+42점)</button></div>
       <div class="hint" id="crash-test-log"></div>
-    </div>
 
-    <div class="card">
-      <h2>DLQ (실패한 이벤트)</h2>
-      <p class="hint" style="margin-top:0">재시도(3회)까지 다 실패한 이벤트는 DLQ로 이동합니다. 아무도 안 보면 조용히 사라지는 것처럼 보이던 걸, 여기서 직접 눈으로 확인합니다.</p>
-      <div class="form-row">
-        <button id="dlq-test-btn">실패 이벤트 발생시키기</button>
-        <button class="danger" id="dlq-clear-btn">DLQ 목록 지우기</button>
-        <span class="hint" style="margin:0">누적 <strong id="dlq-count">0</strong>건</span>
-      </div>
+      <h4>DLQ(실패 이벤트) 유발</h4>
+      <p class="hint" style="margin-top:0">항상 실패하는 이벤트를 발행합니다. 재시도 3회 소진 후 DLQ로 이동한 걸 개발자 콘솔의 "DLQ" 탭에서 확인하세요.</p>
+      <div class="form-row"><button id="dlq-test-btn">실패 이벤트 발생시키기</button></div>
       <div class="hint" id="dlq-test-log"></div>
-      <div class="board" id="dlq-list" style="margin-top:0.5rem"></div>
-    </div>
 
-    <div class="card full">
-      <h2>전체 랭킹 (상위 10)</h2>
-      <div class="board" id="board"></div>
-    </div>
-
-    <div class="card full">
-      <h2>이벤트 로그</h2>
-      <div class="log" id="event-log"><div class="empty">아직 이벤트가 없습니다</div></div>
-    </div>
-
-    <div class="card full guide">
-      <h2>테스트 방법</h2>
-      <ol>
-        <li><strong>지연 확인</strong> — "참가하기" 후 "+10점 올리기"를 누르면 즉시 이벤트 로그에 "발행함"이 찍히지만, 전체 랭킹에 실제로 반영되는 건 Kafka consumer가 이벤트를 소비한 다음입니다(보통 1초 안쪽). 이 발행-반영 사이의 시간차가 이 실험의 핵심입니다.</li>
-        <li><strong>이벤트 시뮬레이션</strong> — "한번에 발사"를 누르면 8명의 봇에게 무작위 점수 이벤트가 쏟아지고, 랭킹이 실시간으로 뒤바뀌는 걸 볼 수 있습니다.</li>
-        <li><strong>멱등성 확인</strong> — "같은 이벤트 두 번 보내기"를 누르면 같은 <code>eventId</code>로 이벤트를 두 번 발행합니다. 점수가 두 번 반영되지 않고 한 번만 반영되는 걸 결과 문구와 이벤트 로그로 바로 확인할 수 있습니다(Redis 기반 멱등성 저장소).</li>
-        <li><strong>크래시 윈도우 재현</strong> — "크래시 테스트 이벤트 발사"를 누르면 이펙트 반영 직전 8초 지연이 시작됩니다(이벤트 로그/터미널 로그에서 지연 시작을 확인). 그 사이 <code>docker kill live-ranking-aggregator-1</code>로 강제 종료 후 <code>docker compose start aggregator</code>로 재시작해보세요 — claim과 이펙트를 하나의 Redis 원자 연산으로 묶어뒀기 때문에, 재배달된 이벤트가 정확히 한 번만(유실도 중복도 없이) 반영되는 걸 확인할 수 있습니다.</li>
-        <li><strong>DLQ 확인</strong> — "실패 이벤트 발생시키기"를 누르면 항상 실패하는 이벤트를 발행합니다. 재시도 3회가 다 소진되면(몇 초 걸림) DLQ로 이동하는데, 그 내용이 DLQ 목록에 그대로 나타나는 걸 확인하세요. 이 목록이 없으면 실패한 이벤트는 아무도 모르게 조용히 사라집니다.</li>
-        <li><strong>초기화</strong> — 테스트를 반복하고 싶으면 "초기화" 버튼으로 랭킹을 전부 지우고 처음부터 다시 시작할 수 있습니다.</li>
-        <li><strong>관측 지표</strong> — aggregator의 <a href="/metrics" target="_blank" rel="noopener">/metrics</a>에서 반영 건수(<code>live_ranking_score_events_applied_total</code>), 중복 차단 건수(<code>live_ranking_score_events_deduped_total</code> — claim+이펙트를 원자화하면서 kafka-forge 표준 지표 대신 로컬로 다시 잼), consumer lag(<code>kafka_forge_consumer_lag</code>)을 함께 확인할 수 있습니다.</li>
-      </ol>
+      <div class="modal-actions">
+        <button class="danger" id="reset-btn">전체 초기화</button>
+      </div>
     </div>
   </div>
 
@@ -118,24 +158,31 @@
 
     let myUserId = null;
 
-    const logEvent = PanelUI.createLogger("event-log");
+    function openModal(id) { document.getElementById(id).hidden = false; }
+    function closeModal(id) { document.getElementById(id).hidden = true; }
+    document.querySelectorAll(".modal-backdrop").forEach((backdrop) => {
+      backdrop.addEventListener("click", (event) => { if (event.target === backdrop) closeModal(backdrop.id); });
+    });
+    document.getElementById("open-tools-btn").addEventListener("click", (event) => {
+      event.preventDefault();
+      openModal("tools-modal");
+    });
 
-    // 점수 반영/DLQ 이동을 폴링 비교가 아니라 서버가 실제로 그 일이 일어나는 순간 SSE로
-    // 흘려보낸 걸로 로그를 채운다(node-forge 1.0.9 AdminEventsModule). aggregator(이 패널을
-    // 서빙하는 프로세스) 안에서 일어나는 일이라 같은 오리진.
-    PanelUI.connectSSE("/admin/logs/stream", (data) => {
-      const event = JSON.parse(data);
-      logEvent(event.message, { atIso: event.at });
+    PanelUI.mountDevConsole({
+      streamUrl: "/admin/logs/stream",
+      title: "개발자 콘솔",
+      logLabel: "로그",
+      tabs: [{ id: "dlq", label: "DLQ", pollMs: 3000, render: renderDlqTab }],
     });
 
     function renderMyStatus(rank, score) {
       const el = document.getElementById("my-status");
       if (!myUserId) {
-        el.innerHTML = '<span class="sub">아직 참가하지 않았습니다</span>';
+        el.innerHTML = '<div class="sub">아직 참가하지 않았습니다</div>';
         return;
       }
       if (rank === null) {
-        el.innerHTML = '<span class="sub">' + myUserId + " — 아직 점수 없음</span>";
+        el.innerHTML = '<div class="sub">' + myUserId + " — 아직 점수 없음</div>";
         return;
       }
       el.innerHTML = '<div class="big">' + rank + "위</div><div class=\"sub\">" + myUserId + " · " + score + "점</div>";
@@ -146,12 +193,11 @@
     }
 
     async function submitEvent(userId, delta, eventId) {
-      const res = await fetch(INGEST_BASE + "/leaderboards/" + LEADERBOARD_ID + "/events", {
+      return fetch(INGEST_BASE + "/leaderboards/" + LEADERBOARD_ID + "/events", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(eventId ? { userId, delta, eventId } : { userId, delta }),
       });
-      return res;
     }
 
     async function fetchUserRank(userId) {
@@ -160,9 +206,8 @@
       return body.data ?? { rank: null, score: null };
     }
 
-    // 이 실험의 핵심을 검증하는 버튼 — 같은 eventId로 두 번 보내도 점수가 한 번만 반영되는지
-    // (Kafka 재배달 시 중복 반영을 막는 RedisIdempotencyStore) 직접 눈으로 확인한다. 봇 시뮬레이션과
-    // "+10점"은 매번 새 eventId를 쓰기 때문에 이 경로를 전혀 안 지나간다 — 별도 버튼이 필요했다.
+    // 이 실험의 핵심을 검증하는 액션 — 같은 eventId로 두 번 보내도 점수가 한 번만 반영되는지
+    // (Kafka 재배달 시 중복 반영을 막는 원자적 claim+이펙트) 직접 눈으로 확인한다.
     async function testIdempotency() {
       const btn = document.getElementById("idem-btn");
       const log = document.getElementById("idem-log");
@@ -173,7 +218,6 @@
       const delta = Math.floor(Math.random() * 20) + 1;
 
       log.textContent = "1차 발행 중… (delta " + delta + ")";
-      logEvent("멱등성 테스트 — eventId " + eventId.slice(0, 8) + "…로 " + delta + "점 1차 발행");
       await submitEvent(userId, delta, eventId);
       await delay(1200);
       const first = await fetchUserRank(userId);
@@ -187,13 +231,8 @@
       log.textContent =
         "1차 " + first.score + "점 → 중복 발행 후 " + second.score + "점 — " +
         (ok ? "변화 없음 (멱등성 정상)" : "점수가 또 올랐음 (중복 반영됨!)");
-      logEvent(
-        "멱등성 테스트 결과: " + (ok ? "정상 — 중복 차단됨" : "실패 — 중복 반영됨") +
-          " (" + first.score + " → " + second.score + ")",
-      );
 
-      // 검증이 끝나면 이번에 올린 delta만큼 되돌려서 idem-test가 실제 랭킹에 계속 쌓여
-      // 남지 않게 한다 — 반복 테스트해도 순위표가 테스트 흔적으로 지저분해지지 않는다.
+      // 검증이 끝나면 이번에 올린 delta만큼 되돌려서 idem-test가 실제 랭킹에 흔적으로 안 남게 한다.
       await submitEvent(userId, -delta);
       await delay(1200);
 
@@ -201,20 +240,15 @@
       await refreshBoard();
     }
 
-    // 재시도 소진 → DLQ 이동까지 kafka-forge 기본 backoff로 1000+2000ms가 걸린다. 여유를 두고
-    // 기다린 다음 목록을 갱신한다 (짧게 잡으면 DLQ에 아직 안 쌓인 상태로 새로고침해서 "안 보임"으로
-    // 오해하기 쉽다).
+    // 재시도 소진 → DLQ 이동까지 kafka-forge 기본 backoff로 1000+2000ms가 걸린다.
     async function testDlq() {
       const btn = document.getElementById("dlq-test-btn");
       const log = document.getElementById("dlq-test-log");
       btn.disabled = true;
       log.textContent = "실패 이벤트 발행 중… (재시도 3회 소진까지 몇 초 걸립니다)";
-      logEvent("DLQ 테스트 — 항상 실패하는 이벤트 발행");
       await submitEvent("__dlq-test__", 1);
       await delay(5000);
-      await refreshDlq();
-      log.textContent = "완료 — 아래 DLQ 목록에서 확인하세요";
-      logEvent("DLQ 테스트 완료 — 아래 목록 갱신됨");
+      log.textContent = "완료 — 개발자 콘솔의 \"DLQ\" 탭에서 확인하세요";
       btn.disabled = false;
     }
 
@@ -223,51 +257,51 @@
       const log = document.getElementById("crash-test-log");
       btn.disabled = true;
       log.textContent = "이벤트 발행함 — 8초 안에 터미널에서 docker kill로 강제 종료해보세요";
-      logEvent("크래시 테스트 — 이펙트 반영 직전 8초 지연 이벤트 발행");
       await submitEvent("__crash-test__", 42);
       await delay(9000);
-      log.textContent = "9초 경과 — 위 '전체 랭킹'/이벤트 로그에서 __crash-test__ 반영 여부를 확인하세요";
+      log.textContent = "9초 경과 — 전체 랭킹/개발자 콘솔 로그에서 __crash-test__ 반영 여부를 확인하세요";
       btn.disabled = false;
     }
 
-    async function clearDlq() {
-      await fetch("/admin/dlq", { method: "DELETE" });
-      logEvent("DLQ 목록 지움 (실제 Kafka DLQ 토픽이 아니라 이 확인용 로그만 지워짐)");
-      await refreshDlq();
-    }
-
-    async function refreshDlq() {
+    // 개발자 콘솔 "DLQ" 탭 — 재시도까지 다 실패한 이벤트가 조용히 사라지지 않고 눈에 보이게 한다.
+    async function renderDlqTab(container) {
       const res = await fetch("/admin/dlq");
       const body = await res.json();
       const data = body.data ?? { count: 0, recent: [] };
-      document.getElementById("dlq-count").textContent = data.count;
+      container.innerHTML =
+        '<div class="form-row"><span class="hint" style="margin:0">누적 <strong>' + data.count + '</strong>건</span>' +
+        '<button class="danger" id="dlq-clear-btn" style="margin-left:auto">DLQ 목록 지우기</button></div>' +
+        (data.recent.length
+          ? data.recent
+              .map(
+                (e) =>
+                  '<div class="dlq-row">' +
+                  new Date(e.failedAt).toLocaleTimeString("ko-KR", { hour12: false }) +
+                  " — " + e.userId + " (" + e.delta + "점) — " + e.error +
+                  "</div>",
+              )
+              .join("")
+          : '<div class="hint">DLQ에 쌓인 이벤트가 없습니다</div>');
 
-      const list = document.getElementById("dlq-list");
-      list.innerHTML = data.recent.length
-        ? data.recent
-            .map(
-              (e) =>
-                '<div class="hint" style="margin:0">' +
-                new Date(e.failedAt).toLocaleTimeString("ko-KR", { hour12: false }) +
-                " — " + e.userId + " (" + e.delta + "점) — " + e.error +
-                "</div>",
-            )
-            .join("")
-        : '<div class="hint" style="margin:0">DLQ에 쌓인 이벤트가 없습니다</div>';
+      const clearBtn = document.getElementById("dlq-clear-btn");
+      if (clearBtn) {
+        clearBtn.addEventListener("click", async () => {
+          await fetch("/admin/dlq", { method: "DELETE" });
+          await renderDlqTab(container);
+        });
+      }
     }
 
     async function joinBoard() {
       myUserId = "me-" + Math.random().toString(36).slice(2, 8);
       document.getElementById("join-btn").style.display = "none";
       document.getElementById("score-btn").style.display = "inline-block";
-      logEvent(myUserId + "로 참가");
       await refreshMyStatus();
     }
 
     async function addMyScore() {
       if (!myUserId) return;
       await submitEvent(myUserId, 10);
-      logEvent(myUserId + " +10점 이벤트 발행함 (반영까지 잠시 대기)");
     }
 
     async function resetBoard() {
@@ -276,8 +310,8 @@
       document.getElementById("join-btn").style.display = "inline-block";
       document.getElementById("score-btn").style.display = "none";
       renderMyStatus(null, null);
-      logEvent("랭킹 초기화");
       await refreshBoard();
+      closeModal("tools-modal");
     }
 
     async function refreshMyStatus() {
@@ -292,6 +326,8 @@
       const res = await fetch("/leaderboards/" + LEADERBOARD_ID + "/top?limit=10");
       const body = await res.json();
       const entries = body.data ?? [];
+
+      document.getElementById("board-chip").textContent = "참가자 " + entries.length + "명";
 
       const board = document.getElementById("board");
       board.innerHTML = entries
@@ -309,9 +345,8 @@
       await refreshMyStatus();
     }
 
-    // 봇들에게 무작위 점수 이벤트를 뿌린다 — 등록/제거 개념이 없는 누적형 점수라, waiting-room의
-    // 버스트처럼 "중지 시 되돌리기"가 필요 없다. 중지는 단순히 "앞으로 예약된 발사를 취소"하는
-    // 의미만 갖는다(이미 나간 이벤트는 그대로 반영되는 게 맞다 — 누적 점수라 취소할 이유가 없음).
+    // 봇들에게 무작위 점수 이벤트를 뿌린다 — 등록/제거 개념이 없는 누적형 점수라, "중지"는
+    // 단순히 "앞으로 예약된 발사를 취소"하는 의미만 갖는다(이미 나간 이벤트는 그대로 반영).
     let burstState = null;
 
     function setBurstRunning(running) {
@@ -325,7 +360,6 @@
       burstState.timers.forEach((timer) => clearTimeout(timer));
       burstState = null;
       setBurstRunning(false);
-      logEvent("이벤트 시뮬레이션 중지 — 이미 발행된 이벤트는 그대로 반영됨");
     }
 
     function runBurst() {
@@ -339,7 +373,6 @@
 
       const log = document.getElementById("burst-log");
       log.textContent = "0/" + count + "건 발행 중…";
-      logEvent(count + "건 이벤트 시뮬레이션 시작");
 
       let done = 0;
       for (let i = 0; i < count; i++) {
@@ -352,11 +385,10 @@
           done++;
           log.textContent = done + "/" + count + "건 발행됨";
           if (done === count) {
-            logEvent(count + "건 이벤트 시뮬레이션 발행 완료 (반영은 잠시 뒤)");
             burstState = null;
             setBurstRunning(false);
           }
-        }, (i * 20));
+        }, i * 20);
         state.timers.push(timer);
       }
     }
@@ -369,12 +401,9 @@
     document.getElementById("idem-btn").addEventListener("click", testIdempotency);
     document.getElementById("crash-test-btn").addEventListener("click", testCrash);
     document.getElementById("dlq-test-btn").addEventListener("click", testDlq);
-    document.getElementById("dlq-clear-btn").addEventListener("click", clearDlq);
 
     refreshBoard();
-    refreshDlq();
     setInterval(refreshBoard, 1000);
-    setInterval(refreshDlq, 3000);
   </script>
 </body>
 </html>

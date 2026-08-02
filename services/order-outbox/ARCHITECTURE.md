@@ -322,3 +322,28 @@ postgres` → 5초 간격으로 3회 연속 구조화된 로그(`{"level":50,...
 "OutboxPublisherService","msg":"outbox 발행 폴링 실패: getaddrinfo ENOTFOUND postgres"}`,
 전체 스택트레이스 포함) 확인, 폴러는 죽지 않고 계속 재시도함. `docker compose start
 postgres` 후 자동 회복, 새 주문이 정상적으로 `confirmed`까지 이어지는 것까지 확인.
+
+### 후속 (2026-08-02) — 실사용 페르소나 화면 + 개발자 콘솔 + order-status.html(실제 목적지 데모)
+
+webhook-relay → waiting-room → live-ranking 순으로 확립한 "메인 화면은 실사용 페르소나만,
+시스템 로그/원시 상태는 개발자 콘솔로, 이 시스템이 실제로 쓰이는 곳은 완전히 별도 스타일의
+데모 앱으로" 컨벤션(`.claude/rules/project/convention.md`)을 네 번째로 이 서비스에 적용
+(`.claude-plans/20260802/order-outbox-persona-split.md`). 백엔드는 전혀 건드리지 않고
+`public/` 정적 파일만 변경/추가했다.
+
+- `panel.html`을 "온라인 스토어에서 주문하는 손님" 페르소나로 재구성: 헤더 바 + "주문하기"
+  히어로(생성 직후 "주문 조회하기 →" 링크로 `order-status.html`을 새 탭에 엶) + "최근 주문"
+  목록만 메인에 남기고, "발행 실패 유발"(poison 트리거)은 "테스트 도구" 모달로 이동. 이벤트
+  로그/dead-letter 목록은 `PanelUI.mountDevConsole`(로그 탭 + "Outbox 상태" 탭, 3초 폴링)로
+  옮겨 메인 화면에서 걷어냈다. fulfillment(3201, cross-origin)의 SSE는 `mountDevConsole`이
+  반환한 `devConsole.log()` 핸들을 그대로 재사용해 같은 로그 탭에 시간순으로 합침
+- **신규 `public/order-status.html`** — webhook-relay의 `channel.html`/waiting-room의
+  `ticket-shop.html`/live-ranking의 `broadcast-overlay.html`에 대응하는, "이 트랜잭셔널
+  아웃박스가 실제로 이어지는 곳"을 보여주는 완전히 다른 스타일(실제 쇼핑몰 주문조회/배송추적
+  페이지 톤)의 데모. 주문번호 검색창 + 결제완료→상품준비중→배송확정 수직 타임라인(완료
+  체크마크/진행중 펄스 애니메이션/대기 회색조). 기존 `GET /orders/:id`를 그대로 1.5초
+  폴링으로 재사용 — 새 API 없음
+
+**검증(2026-08-02)**: 유닛 테스트 22개 회귀 없음. Docker 재빌드(api만)·재기동 후 curl로
+주문 생성 → `GET /orders/:id`가 created→published→confirmed까지 정확히 반영되는 것 확인,
+poison 주문 → 5회 재시도 후 dead-letter API 응답 확인 → revive API로 정상 복구까지 재현.

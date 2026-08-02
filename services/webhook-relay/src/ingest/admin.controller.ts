@@ -11,6 +11,8 @@ import { DeliveryEntity } from "../entities/delivery.entity";
 import { DispatchOutboxRecordEntity } from "../entities/dispatch-outbox-record.entity";
 import { DispatchTrigger } from "../shared/dispatch-event.contract";
 import type { AdminLogEvent } from "../shared/admin-log-event";
+import { toDeliveryView } from "./events.service";
+import type { DeliveryView } from "./events.service";
 
 @Controller("admin")
 @UseInterceptors(ResponseInterceptor)
@@ -61,5 +63,16 @@ export class AdminController {
   @Get("endpoints/:id/circuit")
   async circuitState(@Param("id") id: string): Promise<{ state: string }> {
     return { state: await this.circuitBreaker.getState(id) };
+  }
+
+  // 오퍼레이터 콘솔의 "엔드포인트 클릭 → 배달 타임라인" 화면이 쓰는 조회 API. 이벤트 기준
+  // 조회(events.controller.ts의 GET /events/:id/deliveries)와 짝을 이루는 엔드포인트 기준
+  // 조회라 같은 DeliveryView 매핑을 재사용한다.
+  @Get("endpoints/:id/deliveries")
+  async endpointDeliveries(@Param("id") id: string): Promise<DeliveryView[]> {
+    const rows = await this.dataSource
+      .getRepository(DeliveryEntity)
+      .find({ where: { endpointId: id }, order: { updatedAt: "DESC" }, take: 20 });
+    return rows.map(toDeliveryView);
   }
 }

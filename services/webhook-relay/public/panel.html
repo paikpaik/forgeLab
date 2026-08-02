@@ -5,136 +5,249 @@
 <title>webhook-relay</title>
 <link rel="stylesheet" href="/shared/panel-ui.css" />
 <style>
-  /* 카드/버튼/폼/로그/가이드 공통 스타일은 /shared/panel-ui.css 참고.
-     여기는 webhook-relay 고유 요소(엔드포인트 목록/circuit 배지/배달 목록)만 남긴다. */
-  input[type="text"] { width: 11rem; }
-  input[type="number"] { width: 5rem; }
+  /* 카드/버튼/폼/로그/가이드/개발자콘솔 공통 스타일은 /shared/panel-ui.css 참고.
+     메인 화면은 실제 웹훅 플랫폼(Svix/Hookdeck류) 오퍼레이터 콘솔 느낌만 남긴다 — 항상
+     펼쳐진 관리자 폼 대신 헤더+온보딩+모달 흐름을 쓰고, circuit 원시 상태값·배달 시도 상세
+     같은 기술 데이터는 전부 우측 하단 개발자 콘솔로 옮겼다. */
+  body { padding: 0; }
+  #app-main { padding: 1.5rem; }
 
-  .token-badge { font-family: ui-monospace, monospace; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 999px; }
-  .token-badge.ok { background: #e6f4ea; color: #1a7f4b; }
-  .token-badge.none { background: #f3f4f6; color: #9ca3af; }
-
-  .endpoints, .deliveries { display: flex; flex-direction: column; gap: 0.4rem; }
-  .endpoint-row, .delivery-row {
-    display: grid; align-items: center; gap: 0.5rem; padding: 0.5rem 0.7rem;
-    border-radius: 6px; border: 1px solid #e2e5ea; font-size: 0.82rem;
+  .app-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.9rem 1.5rem; border-bottom: 1px solid var(--panel-border);
   }
-  .endpoint-row { grid-template-columns: 6rem 1fr 8rem 6rem; }
-  .delivery-row { grid-template-columns: 8rem 6rem 4rem 1fr 6rem; }
-  .endpoint-row .id, .delivery-row .id { font-family: ui-monospace, monospace; color: #6b7280; font-size: 0.72rem; }
-  .endpoint-row .detail, .delivery-row .detail { font-size: 0.75rem; color: #6b7280; }
+  .app-brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; font-size: 1rem; }
+  .app-logo { font-size: 1.3rem; }
 
+  .tenant-chip {
+    font-size: 0.78rem; padding: 0.3rem 0.7rem; border-radius: 999px;
+    background: var(--panel-card-bg); border: 1px solid var(--panel-border); color: var(--panel-muted);
+  }
+  .tenant-chip.ok { color: var(--panel-fg); font-family: ui-monospace, monospace; }
+
+  .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.9rem; }
+  .toolbar h2 { margin: 0; }
+
+  .endpoint-summary-bar { display: flex; gap: 0.6rem; margin-bottom: 0.9rem; }
+  .summary-chip { font-size: 0.78rem; padding: 0.25rem 0.7rem; border-radius: 999px; background: var(--panel-card-bg); border: 1px solid var(--panel-border); }
+  .summary-chip b { margin-right: 0.25rem; }
+
+  .endpoints { display: flex; flex-direction: column; gap: 0.5rem; }
+  .endpoint-row {
+    display: grid; grid-template-columns: 1fr 11rem 6rem 9rem; align-items: center; gap: 0.7rem;
+    padding: 0.7rem 0.9rem; border: 1px solid var(--panel-border); border-radius: 8px; font-size: 0.85rem;
+  }
+  .endpoint-row .ep-name { font-weight: 600; }
+  .endpoint-row .ep-types { color: var(--panel-muted); font-size: 0.78rem; }
+  .endpoint-row button.send-test-btn { font-size: 0.75rem; padding: 0.3rem 0.6rem; justify-self: end; }
+
+  .status-pill { padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; text-align: center; }
+  .status-pill.ok { background: #e6f4ea; color: #1a7f4b; }
+  .status-pill.warn { background: #fff4e0; color: #9a6400; }
+  .status-pill.down { background: #fde3e1; color: #b42318; }
+
+  /* 새 엔드포인트 / 테스트 이벤트 보내기 모달 — 항상 펼쳐진 폼 대신, 실제 제품처럼 필요할 때만
+     여는 다이얼로그로 만든다 */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 900;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px;
+    padding: 1.25rem 1.4rem; width: min(26rem, 90vw); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  }
+  .modal h3 { margin: 0 0 0.9rem; font-size: 1rem; }
+  .modal label { display: block; font-size: 0.8rem; color: var(--panel-muted); margin-bottom: 0.9rem; }
+  .modal label > input, .modal label > select { display: block; width: 100%; margin-top: 0.3rem; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.3rem; }
+
+  /* 아래부터는 개발자 콘솔의 "엔드포인트 상태" 탭 내부 렌더링에서만 쓰는 클래스 */
+  .devstate-endpoint + .devstate-endpoint { margin-top: 0.8rem; padding-top: 0.8rem; border-top: 1px dashed var(--panel-border); }
+  .devstate-head { display: flex; align-items: center; gap: 0.6rem; font-size: 0.8rem; margin-bottom: 0.4rem; }
+  .devstate-head .ep-id { font-family: ui-monospace, monospace; color: var(--panel-faint); font-size: 0.72rem; }
+  .devstate-head .ep-url { color: var(--panel-muted); font-size: 0.75rem; }
   .badge { padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 700; text-align: center; }
   .badge.CLOSED, .badge.success { background: #e6f4ea; color: #1a7f4b; }
   .badge.OPEN, .badge.dead { background: #fde3e1; color: #b42318; }
   .badge.HALF_OPEN, .badge.pending { background: #fff4e0; color: #9a6400; }
-
-  .dead-row {
-    display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
-    font-size: 0.78rem; color: #7c2d12; padding: 0.3rem 0; border-bottom: 1px dashed #f3d9c4;
+  .timeline-row {
+    display: grid; grid-template-columns: 6rem 4rem 1fr 6rem; align-items: center; gap: 0.6rem;
+    font-size: 0.78rem; padding: 0.3rem 0; border-bottom: 1px dashed var(--panel-border);
   }
-  .dead-row .msg { flex: 1; }
-  .dead-row button { flex-shrink: 0; font-size: 0.72rem; padding: 0.2rem 0.6rem; }
+  .timeline-row:last-child { border-bottom: none; }
+  .timeline-row .detail { color: var(--panel-muted); }
+  .timeline-row button { font-size: 0.72rem; padding: 0.15rem 0.55rem; }
+
+  /* "웹훅이 실제로 쓰이는 곳" 카드 — 이 랩의 관리자 UI와 완전히 다른 별도 앱(channel.html)을
+     담고 있다는 걸 시각적으로도 드러내려고, 브라우저 창처럼 보이는 가짜 타이틀바를 얹는다. */
+  .embed-frame { border: 1px solid var(--panel-border); border-radius: 8px; overflow: hidden; }
+  .embed-titlebar {
+    display: flex; align-items: center; gap: 0.7rem; padding: 0.4rem 0.7rem;
+    background: var(--panel-card-bg); border-bottom: 1px solid var(--panel-border);
+  }
+  .traffic-lights { display: flex; gap: 0.3rem; }
+  .traffic-lights i { width: 0.6rem; height: 0.6rem; border-radius: 999px; display: block; }
+  .traffic-lights i:nth-child(1) { background: #ff5f57; }
+  .traffic-lights i:nth-child(2) { background: #febc2e; }
+  .traffic-lights i:nth-child(3) { background: #28c840; }
+  .embed-url { font-size: 0.75rem; color: var(--panel-faint); font-family: ui-monospace, monospace; }
+  .embed-frame iframe { width: 100%; height: 22rem; border: none; display: block; }
 </style>
 </head>
 <body>
-  <h1>webhook-relay · 웹훅 전달 플랫폼 패널</h1>
+  <header class="app-header">
+    <div class="app-brand"><span class="app-logo">🪝</span><span class="app-name">Webhook Relay</span></div>
+    <span class="tenant-chip" id="tenant-chip">앱 없음</span>
+  </header>
 
-  <div class="grid">
-    <div class="card">
-      <h2>테넌트</h2>
+  <main id="app-main">
+    <section class="card full" id="onboarding-card">
+      <h2>시작하기</h2>
+      <p class="hint" style="margin-top:0">
+        웹훅을 받을 앱을 하나 만드세요. 앱마다 API 키가 발급되고, 그 아래에 엔드포인트를
+        등록해 이벤트를 구독합니다.
+      </p>
       <div class="form-row">
-        <label>이름 <input type="text" id="tenant-name-input" value="acme"></label>
-        <button id="create-tenant-btn">테넌트 생성</button>
-        <span class="token-badge none" id="tenant-badge">테넌트 없음</span>
+        <input type="text" id="tenant-name-input" value="acme" placeholder="앱 이름">
+        <button class="primary" id="create-tenant-btn">앱 만들기</button>
       </div>
-      <p class="hint" style="margin-bottom:0">API 키는 브라우저에 저장됩니다 — 새로고침해도 유지됩니다. 실무의 서버-to-서버 API 키 인증 방식(사람 로그인 아님)입니다.</p>
+    </section>
+
+    <div class="grid">
+      <section class="card" id="endpoints-card" hidden>
+        <div class="toolbar">
+          <h2>엔드포인트</h2>
+          <button class="primary" id="open-add-endpoint-btn">+ 새 엔드포인트</button>
+        </div>
+        <div class="endpoint-summary-bar" id="endpoint-summary"></div>
+        <div class="endpoints" id="endpoint-list"></div>
+      </section>
+
+      <section class="card" id="channel-card" hidden>
+        <div class="toolbar">
+          <h2>웹훅이 실제로 쓰이는 곳</h2>
+          <a href="http://localhost:3401/channel.html" target="_blank" rel="noopener">새 창에서 열기 ↗</a>
+        </div>
+        <p class="hint" style="margin-top:0">
+          이 랩의 관리 화면과 완전히 다른, 별도로 구현한 채팅 워크스페이스입니다. "정상
+          응답"/"느린 응답" 엔드포인트로 이벤트가 도착하면 봇이 실제로 메시지를 올립니다.
+        </p>
+        <div class="embed-frame">
+          <div class="embed-titlebar">
+            <span class="traffic-lights"><i></i><i></i><i></i></span>
+            <span class="embed-url">localhost:3401/channel.html</span>
+          </div>
+          <iframe src="http://localhost:3401/channel.html" title="webhook-relay 알림 채널"></iframe>
+        </div>
+      </section>
     </div>
 
-    <div class="card">
-      <h2>엔드포인트 등록</h2>
-      <div class="form-row">
-        <label>수신 시나리오 <select id="scenario-select">
-          <option value="ok">ok (정상)</option>
-          <option value="fail">fail (항상 실패)</option>
-          <option value="slow">slow (3초 지연 후 성공)</option>
-          <option value="timeout">timeout (8초 지연 — 타임아웃 유발)</option>
-        </select></label>
-        <label>이벤트 타입 <input type="text" id="event-types-input" value="order.created"></label>
-        <button class="primary" id="create-endpoint-btn">등록</button>
-      </div>
-      <p class="hint" style="margin-bottom:0">test-receiver(내장 테스트 수신 서버)의 시나리오를 골라 등록합니다. HMAC 서명 검증용 secret은 자동 생성됩니다.</p>
-      <div class="endpoints" id="endpoint-list" style="margin-top:0.6rem"></div>
-    </div>
-
-    <div class="card full">
-      <h2>이벤트 발행</h2>
-      <div class="form-row">
-        <label>타입 <input type="text" id="publish-type-input" value="order.created"></label>
-        <label>payload(JSON) <input type="text" id="publish-payload-input" value='{"orderId":"o-1"}' style="width:16rem"></label>
-        <button class="primary" id="publish-btn">발행</button>
-        <button class="danger" id="burst-btn">한 엔드포인트로 5건 연속 발사(circuit breaker 테스트)</button>
-      </div>
-      <p class="hint" id="publish-hint" style="margin-bottom:0">이벤트 타입과 일치하는(또는 "*") 활성 엔드포인트 전부로 fan-out됩니다.</p>
-      <div class="deliveries" id="delivery-list" style="margin-top:0.6rem"></div>
-    </div>
-
-    <div class="card full">
-      <h2>죽은 배달(dead) — 복구</h2>
-      <p class="hint" style="margin-top:0">최대 재시도(5회) 초과 시 더 이상 재시도되지 않습니다. "복구"를 누르면 즉시 재시도 대상으로 되돌립니다(엔드포인트가 그 사이 복구됐다면 성공합니다).</p>
-      <div class="form-row">
-        <span class="hint" style="margin:0">누적 <strong id="dead-count">0</strong>건</span>
-      </div>
-      <div id="dead-list"></div>
-    </div>
-
-    <div class="card full">
-      <h2>이벤트 로그</h2>
-      <div class="log" id="event-log"><div class="empty">아직 이벤트가 없습니다</div></div>
-    </div>
-
-    <div class="card full guide">
-      <h2>테스트 방법</h2>
+    <section class="card full guide">
+      <h2>둘러보기</h2>
       <ol>
-        <li><strong>정상 배달</strong> — "ok" 시나리오 엔드포인트를 등록하고 이벤트를 발행하면, 몇 초 안에 배달 목록에서 <span class="badge success">success</span>로 바뀌는 걸 확인하세요. test-receiver가 HMAC 서명을 실제로 검증합니다.</li>
-        <li><strong>재시도 + 백오프</strong> — "fail" 시나리오로 등록하고 발행하면 실패가 반복되며 attempts가 늘어나고, nextAttemptAt이 지수 백오프(30초→2분→…)로 밀리는 걸 확인할 수 있습니다.</li>
-        <li><strong>circuit breaker</strong> — "한 엔드포인트로 5건 연속 발사"를 fail 엔드포인트에 누르면, 연속 실패 임계치(기본 3)를 넘는 순간부터 나머지 요청은 실제 HTTP 호출 없이 즉시 보류됩니다(엔드포인트 목록의 배지가 OPEN으로 바뀜). 여러 delivery-worker 인스턴스로 스케일해도(<code>docker compose up -d --scale delivery-worker=2</code>) 모든 인스턴스가 이 상태를 Redis로 공유합니다.</li>
-        <li><strong>죽은 배달 복구</strong> — fail 엔드포인트가 최대 재시도까지 다 실패하면 데드레터 목록에 나타납니다. "복구"를 누르면 즉시 재시도되는데, 그 사이 회로가 아직 열려있으면 재시도 자체가 보류될 수 있습니다(회로가 닫힌 뒤에 실제로 재시도됨).</li>
-        <li><strong>관측 지표</strong> — ingest의 <a href="/metrics" target="_blank" rel="noopener">/metrics</a>에서 확인 가능합니다.</li>
+        <li><strong>엔드포인트 추가</strong> — "+ 새 엔드포인트"로 등록하면 곧바로 목록에 나타나고,
+          상태는 <span class="status-pill ok">정상</span>으로 시작합니다.</li>
+        <li><strong>테스트 이벤트 보내기</strong> — 각 엔드포인트 옆 버튼으로 그 이벤트 타입을
+          구독 중인 엔드포인트 전체에 이벤트를 전달합니다. 몇 초 안에 상태가 갱신되고, "정상
+          응답"/"느린 응답" 엔드포인트로 실제 도착하면 아래 "실시간 알림 채널"에 메시지로
+          나타납니다(트랜잭션 아웃박스 발행 주기 때문에 즉시는 아닙니다).</li>
+        <li><strong>장애 상황 재현</strong> — 등록 시 "장애 시뮬레이션"을 고르고 이벤트를 여러 번
+          보내면, 연속 실패 임계치를 넘는 순간 상태가 <span class="status-pill down">일시 중단</span>으로
+          바뀌고 이후 요청은 실제 호출 없이 즉시 보류됩니다. 여러 delivery-worker 인스턴스로
+          스케일해도(<code>docker compose up -d --scale delivery-worker=2</code>) 이 상태는 Redis로
+          공유됩니다.</li>
+        <li><strong>개발자 콘솔</strong> — 우측 하단 버튼을 누르면 실제 브라우저 개발자 도구처럼
+          "로그"와 "엔드포인트 상태"(circuit 원시값 + 배달 이력 + dead 복구) 탭을 확인할 수
+          있습니다. 상단 손잡이를 드래그하면 높이 조절이 가능합니다. 지표는
+          <a href="/metrics" target="_blank" rel="noopener">/metrics</a>에서 확인하세요.</li>
       </ol>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="add-endpoint-modal" hidden>
+    <div class="modal">
+      <h3>새 엔드포인트</h3>
+      <label>수신 서버 동작
+        <select id="scenario-select">
+          <option value="ok">정상 응답</option>
+          <option value="fail">장애 시뮬레이션</option>
+          <option value="slow">느린 응답</option>
+          <option value="timeout">타임아웃 유발</option>
+        </select>
+      </label>
+      <label>구독할 이벤트 타입(쉼표로 구분)
+        <input type="text" id="event-types-input" value="order.created">
+      </label>
+      <div class="modal-actions">
+        <button id="cancel-add-endpoint-btn">취소</button>
+        <button class="primary" id="create-endpoint-btn">추가</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="send-event-modal" hidden>
+    <div class="modal">
+      <h3>테스트 이벤트 보내기</h3>
+      <p class="hint" style="margin-top:0">이 타입을 구독 중인 엔드포인트 전체로 전달됩니다.</p>
+      <label>이벤트 타입
+        <input type="text" id="send-type-input">
+      </label>
+      <div class="modal-actions">
+        <button id="send-burst-btn">5건 한번에(부하 테스트)</button>
+        <button class="primary" id="send-one-btn">보내기</button>
+      </div>
     </div>
   </div>
 
   <script src="/shared/panel-ui.js"></script>
   <script>
-    const API_BASE = "";
     let apiKey = localStorage.getItem("webhook-relay-api-key");
     let tenantName = localStorage.getItem("webhook-relay-tenant-name");
-    let lastPublishedEventId = null;
     let knownEndpoints = [];
 
-    const logEvent = PanelUI.createLogger("event-log");
+    const SCENARIO_LABEL = { ok: "정상 응답", fail: "장애 시뮬레이션", slow: "느린 응답", timeout: "타임아웃 유발" };
+    const CIRCUIT_STATUS = {
+      CLOSED: { label: "정상", cls: "ok" },
+      HALF_OPEN: { label: "복구 확인 중", cls: "warn" },
+      OPEN: { label: "일시 중단", cls: "down" },
+    };
 
-    PanelUI.connectSSE("/admin/logs/stream", (data) => {
-      const event = JSON.parse(data);
-      logEvent(event.message, { atIso: event.at });
+    PanelUI.mountDevConsole({
+      streamUrl: "/admin/logs/stream",
+      title: "개발자 콘솔",
+      logLabel: "로그",
+      tabs: [{ id: "endpoint-state", label: "엔드포인트 상태", pollMs: 2000, render: renderEndpointStateTab }],
     });
 
-    function renderTenantBadge() {
-      const badge = document.getElementById("tenant-badge");
+    function openModal(id) { document.getElementById(id).hidden = false; }
+    function closeModal(id) { document.getElementById(id).hidden = true; }
+    document.querySelectorAll(".modal-backdrop").forEach((backdrop) => {
+      backdrop.addEventListener("click", (event) => {
+        if (event.target === backdrop) closeModal(backdrop.id);
+      });
+    });
+
+    function renderShell() {
+      const chip = document.getElementById("tenant-chip");
       if (apiKey) {
-        badge.textContent = (tenantName || "테넌트") + " · " + apiKey.slice(0, 12) + "…";
-        badge.className = "token-badge ok";
+        chip.textContent = (tenantName || "앱") + " · " + apiKey.slice(0, 12) + "…";
+        chip.className = "tenant-chip ok";
+        chip.title = apiKey;
       } else {
-        badge.textContent = "테넌트 없음";
-        badge.className = "token-badge none";
+        chip.textContent = "앱 없음";
+        chip.className = "tenant-chip";
+        chip.removeAttribute("title");
       }
+      document.getElementById("onboarding-card").hidden = !!apiKey;
+      document.getElementById("endpoints-card").hidden = !apiKey;
+      document.getElementById("channel-card").hidden = !apiKey;
     }
 
     async function authedFetch(path, options) {
       options = options || {};
       options.headers = Object.assign({}, options.headers, { "x-api-key": apiKey });
-      return fetch(API_BASE + path, options);
+      return fetch(path, options);
     }
 
     document.getElementById("create-tenant-btn").addEventListener("click", async () => {
@@ -145,162 +258,200 @@
         body: JSON.stringify({ name }),
       });
       const body = await res.json();
-      if (!res.ok) { logEvent("테넌트 생성 실패: " + JSON.stringify(body)); return; }
+      if (!res.ok) return;
       apiKey = body.data.apiKey;
       tenantName = name;
       localStorage.setItem("webhook-relay-api-key", apiKey);
       localStorage.setItem("webhook-relay-tenant-name", tenantName);
-      renderTenantBadge();
-      logEvent("테넌트 생성 — " + name);
+      renderShell();
       await refreshEndpoints();
     });
 
+    document.getElementById("open-add-endpoint-btn").addEventListener("click", () => openModal("add-endpoint-modal"));
+    document.getElementById("cancel-add-endpoint-btn").addEventListener("click", () => closeModal("add-endpoint-modal"));
+
     document.getElementById("create-endpoint-btn").addEventListener("click", async () => {
-      if (!apiKey) { logEvent("먼저 테넌트를 생성하세요", true); return; }
+      if (!apiKey) return;
       const scenario = document.getElementById("scenario-select").value;
       const eventTypes = document.getElementById("event-types-input").value.split(",").map((s) => s.trim()).filter(Boolean);
       const secret = "sec-" + Math.random().toString(36).slice(2, 10);
       const url = "http://test-receiver:3401/receive/" + scenario + "?secret=" + secret;
 
-      const res = await authedFetch("/endpoints", {
+      await authedFetch("/endpoints", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ url, secret, eventTypes }),
       });
-      const body = await res.json();
-      if (!res.ok) { logEvent("엔드포인트 등록 실패: " + JSON.stringify(body)); return; }
-      logEvent("엔드포인트 등록 — 시나리오=" + scenario + ", 타입=" + eventTypes.join(","));
+      closeModal("add-endpoint-modal");
       await refreshEndpoints();
     });
 
-    async function refreshEndpoints() {
+    let sendModalType = "order.created";
+
+    function openSendModal(prefillType) {
+      sendModalType = prefillType || "order.created";
+      document.getElementById("send-type-input").value = sendModalType;
+      openModal("send-event-modal");
+    }
+
+    async function sendEvent(payloadExtra) {
+      const type = document.getElementById("send-type-input").value.trim() || "order.created";
+      await authedFetch("/events", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type, payload: Object.assign({ source: "panel" }, payloadExtra) }),
+      });
+    }
+
+    // 발행 직후엔 delivery row는 바로 생기지만(트랜잭션 안에서 즉시 커밋), 실제 Kafka
+    // 발행은 OutboxPublisherService의 폴링 주기(기본 2초)까지 기다려야 시작된다 — 그 전엔
+    // circuit 상태도, HTTP 시도 결과도 바뀔 수 없다. 개발자 콘솔 탭 자체도 2초 폴링이라
+    // 두 지연이 겹치면 최대 4~5초간 "아무 변화 없음"으로 보인다. 클릭 직후 즉시 한 번,
+    // 아웃박스가 실제로 flush됐을 시점(+2.5초)에 한 번 더 강제로 갱신해서 이 텀을 줄인다.
+    function refreshAll() {
+      refreshEndpoints();
+      refreshDevConsoleState();
+    }
+
+    function refreshDevConsoleState() {
+      const container = document.querySelector('[data-panel="endpoint-state"]');
+      if (container) renderEndpointStateTab(container);
+    }
+
+    document.getElementById("send-one-btn").addEventListener("click", async () => {
       if (!apiKey) return;
+      await sendEvent({});
+      closeModal("send-event-modal");
+      refreshAll();
+      setTimeout(refreshAll, 2500);
+    });
+
+    document.getElementById("send-burst-btn").addEventListener("click", async () => {
+      if (!apiKey) return;
+      await Promise.all(Array.from({ length: 5 }, () => sendEvent({ burst: true })));
+      closeModal("send-event-modal");
+      refreshAll();
+      setTimeout(refreshAll, 2500);
+    });
+
+    function endpointRowHtml(ep) {
+      const scenario = (ep.url.match(/\/receive\/(\w+)/) || [, null])[1];
+      const status = CIRCUIT_STATUS[ep.circuit] || { label: ep.circuit, cls: "warn" };
+      return (
+        '<div class="endpoint-row">' +
+        '<span class="ep-name">' + (SCENARIO_LABEL[scenario] || ep.url) + "</span>" +
+        '<span class="ep-types">' + ep.eventTypes.join(", ") + "</span>" +
+        '<span class="status-pill ' + status.cls + '">' + status.label + "</span>" +
+        '<button class="send-test-btn" data-send-type="' + ep.eventTypes[0] + '">테스트 이벤트 보내기</button>' +
+        "</div>"
+      );
+    }
+
+    function endpointSummaryHtml(withCircuit) {
+      const counts = { ok: 0, warn: 0, down: 0 };
+      withCircuit.forEach((ep) => { counts[(CIRCUIT_STATUS[ep.circuit] || { cls: "warn" }).cls]++; });
+      return (
+        '<span class="summary-chip"><b>' + withCircuit.length + "</b>개 엔드포인트</span>" +
+        '<span class="summary-chip"><b>' + counts.ok + "</b>정상</span>" +
+        (counts.warn ? '<span class="summary-chip"><b>' + counts.warn + "</b>확인 중</span>" : "") +
+        (counts.down ? '<span class="summary-chip"><b>' + counts.down + "</b>중단</span>" : "")
+      );
+    }
+
+    async function fetchEndpointsWithCircuit() {
+      if (!apiKey) return [];
       const res = await authedFetch("/endpoints");
       const body = await res.json();
       knownEndpoints = body.data ?? [];
-
-      const list = document.getElementById("endpoint-list");
-      if (knownEndpoints.length === 0) {
-        list.innerHTML = '<div class="hint">아직 등록된 엔드포인트가 없습니다</div>';
-        return;
-      }
-
-      const withCircuit = await Promise.all(
+      return Promise.all(
         knownEndpoints.map((ep) =>
           fetch("/admin/endpoints/" + ep.id + "/circuit")
             .then((r) => r.json())
             .then((b) => ({ ...ep, circuit: b.data.state })),
         ),
       );
-
-      list.innerHTML = withCircuit
-        .map((ep) => {
-          const scenario = (ep.url.match(/\/receive\/(\w+)/) || [, "?"])[1];
-          return (
-            '<div class="endpoint-row"><div class="id">' + ep.id.slice(0, 8) + '…</div><div class="detail">' +
-            scenario + " · " + ep.eventTypes.join(",") + '</div><div class="badge ' + ep.circuit + '">' +
-            ep.circuit + '</div><div class="detail">' + (ep.active ? "활성" : "비활성") + "</div></div>"
-          );
-        })
-        .join("");
     }
 
-    document.getElementById("publish-btn").addEventListener("click", async () => {
-      if (!apiKey) { logEvent("먼저 테넌트를 생성하세요", true); return; }
-      const type = document.getElementById("publish-type-input").value.trim() || "order.created";
-      let payload;
-      try {
-        payload = JSON.parse(document.getElementById("publish-payload-input").value || "{}");
-      } catch (e) {
-        logEvent("payload가 올바른 JSON이 아닙니다", true);
+    async function refreshEndpoints() {
+      if (!apiKey) return;
+      const withCircuit = await fetchEndpointsWithCircuit();
+      const summary = document.getElementById("endpoint-summary");
+      const list = document.getElementById("endpoint-list");
+
+      if (withCircuit.length === 0) {
+        summary.innerHTML = "";
+        list.innerHTML = '<div class="hint">아직 등록된 엔드포인트가 없습니다 — "+ 새 엔드포인트"로 시작하세요</div>';
         return;
       }
 
-      const res = await authedFetch("/events", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ type, payload }),
+      summary.innerHTML = endpointSummaryHtml(withCircuit);
+      list.innerHTML = withCircuit.map(endpointRowHtml).join("");
+      list.querySelectorAll("button[data-send-type]").forEach((btn) => {
+        btn.addEventListener("click", () => openSendModal(btn.getAttribute("data-send-type")));
       });
-      const body = await res.json();
-      if (!res.ok) { logEvent("이벤트 발행 실패: " + JSON.stringify(body), true); return; }
-      lastPublishedEventId = body.data.eventId;
-      logEvent("이벤트 발행 — " + type + " (구독 엔드포인트 " + body.data.deliveryIds.length + "개로 fan-out)");
-      await refreshDeliveries();
-    });
-
-    document.getElementById("burst-btn").addEventListener("click", async () => {
-      if (!apiKey) { logEvent("먼저 테넌트를 생성하세요", true); return; }
-      const type = document.getElementById("publish-type-input").value.trim() || "order.created";
-      logEvent("circuit breaker 테스트 — " + type + " 타입으로 5건 연속 발사");
-      await Promise.all(
-        Array.from({ length: 5 }, () =>
-          authedFetch("/events", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ type, payload: { burst: true } }),
-          }),
-        ),
-      );
-      await refreshDeliveries();
-      await refreshEndpoints();
-    });
-
-    async function refreshDeliveries() {
-      if (!lastPublishedEventId) return;
-      const res = await authedFetch("/events/" + lastPublishedEventId + "/deliveries");
-      const body = await res.json();
-      const deliveries = body.data ?? [];
-
-      const list = document.getElementById("delivery-list");
-      list.innerHTML = deliveries.length
-        ? deliveries
-            .map(
-              (d) =>
-                '<div class="delivery-row"><div class="id">' + d.id.slice(0, 8) + '…</div><div class="badge ' +
-                d.status + '">' + d.status + '</div><div>' + d.attempts + '회</div><div class="detail">' +
-                (d.lastError || "-") + '</div><div class="detail">' + (d.responseStatus ?? "-") + '</div></div>',
-            )
-            .join("")
-        : '<div class="hint">최근 발행한 이벤트가 없습니다</div>';
     }
 
-    async function refreshDead() {
-      const res = await fetch("/admin/deliveries/dead");
-      const body = await res.json();
-      const data = body.data ?? { count: 0, recent: [] };
-      document.getElementById("dead-count").textContent = data.count;
+    function timelineRowHtml(d) {
+      const when = d.lastAttemptAt ? new Date(d.lastAttemptAt).toLocaleTimeString("ko-KR", { hour12: false }) : "대기 중";
+      const detail = d.lastError || (d.responseStatus != null ? "HTTP " + d.responseStatus : "-");
+      const replayBtn = d.status === "dead" ? '<button data-replay-id="' + d.id + '">복구</button>' : "<span></span>";
+      return (
+        '<div class="timeline-row"><span class="badge ' + d.status + '">' + d.status + "</span>" +
+        "<span class=\"detail\">" + d.attempts + "회</span>" +
+        "<span class=\"detail\">" + when + " · " + detail + "</span>" +
+        replayBtn +
+        "</div>"
+      );
+    }
 
-      const list = document.getElementById("dead-list");
-      list.innerHTML = data.recent.length
-        ? data.recent
-            .map(
-              (d) =>
-                '<div class="dead-row"><span class="msg">' + d.id.slice(0, 8) + "… — " + d.attempts + "번 실패 — " +
-                d.lastError + '</span><button data-replay-id="' + d.id + '">복구</button></div>',
-            )
-            .join("")
-        : '<div class="hint">아직 죽은 배달이 없습니다</div>';
+    // 개발자 콘솔 "엔드포인트 상태" 탭 — 실제 개발자 도구의 상태/네트워크 패널처럼, 사람이
+    // 보는 화면(정상/일시중단)이 아니라 원시 값(circuit 상태 문자열, 배달별 시도횟수·응답코드·
+    // 에러메시지)을 그대로 노출한다. 탭이 열려 있는 동안 mountDevConsole이 2초마다 재호출한다.
+    async function renderEndpointStateTab(container) {
+      if (!apiKey) {
+        container.innerHTML = '<div class="hint">먼저 앱을 만들고 엔드포인트를 등록하세요</div>';
+        return;
+      }
+      if (!knownEndpoints.length) await fetchEndpointsWithCircuit();
+      const endpoints = knownEndpoints;
+      if (endpoints.length === 0) {
+        container.innerHTML = '<div class="hint">등록된 엔드포인트가 없습니다</div>';
+        return;
+      }
 
-      list.querySelectorAll("button[data-replay-id]").forEach((btn) => {
+      const sections = await Promise.all(
+        endpoints.map(async (ep) => {
+          const [circuitRes, deliveriesRes] = await Promise.all([
+            fetch("/admin/endpoints/" + ep.id + "/circuit").then((r) => r.json()),
+            fetch("/admin/endpoints/" + ep.id + "/deliveries").then((r) => r.json()),
+          ]);
+          const deliveries = deliveriesRes.data ?? [];
+          return (
+            '<div class="devstate-endpoint">' +
+            '<div class="devstate-head"><span class="ep-id">' + ep.id.slice(0, 8) + "…</span>" +
+            '<span class="badge ' + circuitRes.data.state + '">' + circuitRes.data.state + "</span>" +
+            '<span class="ep-url">' + ep.url + "</span></div>" +
+            (deliveries.length
+              ? deliveries.map(timelineRowHtml).join("")
+              : '<div class="hint">배달 이력 없음</div>') +
+            "</div>"
+          );
+        }),
+      );
+
+      container.innerHTML = sections.join("");
+      container.querySelectorAll("button[data-replay-id]").forEach((btn) => {
         btn.addEventListener("click", () => replayDead(btn.getAttribute("data-replay-id")));
       });
     }
 
     async function replayDead(id) {
-      const res = await fetch("/admin/deliveries/" + id + "/replay", { method: "POST" });
-      const body = await res.json();
-      logEvent(res.ok ? "죽은 배달 복구함 (id " + id.slice(0, 8) + "…)" : "복구 실패: " + JSON.stringify(body));
-      await refreshDead();
-      await refreshDeliveries();
+      await fetch("/admin/deliveries/" + id + "/replay", { method: "POST" });
     }
 
-    renderTenantBadge();
+    renderShell();
     refreshEndpoints();
-    refreshDeliveries();
-    refreshDead();
     setInterval(refreshEndpoints, 3000);
-    setInterval(refreshDeliveries, 1500);
-    setInterval(refreshDead, 3000);
   </script>
 </body>
 </html>

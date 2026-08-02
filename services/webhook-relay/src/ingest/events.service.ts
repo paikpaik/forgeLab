@@ -80,15 +80,19 @@ export class EventsService {
 
   async listDeliveries(eventId: string): Promise<DeliveryView[]> {
     const rows = await this.dataSource.getRepository(DeliveryEntity).find({ where: { eventId } });
-    return rows.map((row) => ({
-      id: row.id,
-      endpointId: row.endpointId,
-      status: row.status,
-      attempts: row.attempts,
-      nextAttemptAt: row.nextAttemptAt,
-      lastAttemptAt: row.lastAttemptAt,
-      lastError: row.lastError,
-      responseStatus: row.responseStatus,
-    }));
+    return rows.map(toDeliveryView);
   }
+}
+
+export function toDeliveryView(row: DeliveryEntity): DeliveryView {
+  return {
+    id: row.id,
+    endpointId: row.endpointId,
+    status: row.status,
+    attempts: row.attempts,
+    nextAttemptAt: row.nextAttemptAt,
+    lastAttemptAt: row.lastAttemptAt,
+    lastError: row.lastError,
+    responseStatus: row.responseStatus,
+  };
 }

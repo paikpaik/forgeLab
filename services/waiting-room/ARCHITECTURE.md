@@ -124,3 +124,26 @@ node-forge 관련 이슈 대응 이력은 dashboard의 **Issue** 탭 참고.
 **검증(2026-08-01, 실제 컨테이너)**: 유저 1명 등록 → `curl -sN`으로 `/admin/logs/stream` 구독,
 `joined`(등록, 순번/대기인원 포함) → `admitted`(입장 허용, 5초 이내 배치 처리) 2개 이벤트가
 순서대로 정상 수신되는 것 확인. 유닛 테스트 20개 전부 통과.
+
+### 후속 (2026-08-02) — 실사용 페르소나 화면 + 개발자 콘솔 + ticket-shop.html(실제 목적지 데모)
+
+webhook-relay에서 먼저 확립한 "메인 화면은 실사용 페르소나만, 시스템 로그/원시 상태는
+개발자 콘솔로" 컨벤션(`.claude/rules/project/convention.md`)을 이 서비스에도 같은 깊이로
+적용(`.claude-plans/20260802/waiting-room-persona-split.md`). 백엔드는 전혀 건드리지 않고
+`public/` 정적 파일만 변경/추가했다.
+
+- `panel.html`을 실제 온라인 티켓팅 대기열 키오스크 페르소나로 재구성: 헤더 바, "내 티켓"
+  히어로(점선 티켓 스텁 스타일), 입장 가능해지면 "입장하기" 링크로 `ticket-shop.html`(새 탭)로
+  이동. 부하 시뮬레이션/초기화는 "테스트 도구" 모달로, 이벤트 로그는 `PanelUI.mountDevConsole`
+  (로그 탭 + "대기열 원시 상태" 탭, 2초 폴링)로 이동해 메인 화면에서 걷어냄
+- **신규 `public/ticket-shop.html`** — webhook-relay의 `channel.html`(Slack 워크스페이스)에
+  대응하는, "이 대기열이 실제로 지키는 목적지"를 보여주는 완전히 다른 스타일(실제 티켓
+  판매 사이트 톤)의 데모 앱. 기존 `POST /rooms/:roomId/waiting-users/verify` API를 그대로
+  호출해 입장 토큰을 검증하고, 유효하면 좌석등급/매수 선택 + `ADMITTED_TOKEN_TTL_SECONDS`
+  (기본 300초)에 맞춘 카운트다운이 있는 티켓 구매 화면을 보여준다(구매 자체는 실제 결제
+  API가 없는 스코프 밖이라 클라이언트에서 완결하는 데모). 무효/만료 토큰이면 "입장할 수
+  없습니다" + 대기열로 돌아가기 안내. 새 도메인 API 없이 기존 `verify`만 재사용
+
+**검증(2026-08-02)**: 유닛 테스트 20개 회귀 없음. Docker 재빌드·재기동 후 curl로 등록 →
+5초 뒤 admission으로 토큰 발급 → 그 토큰으로 `verify` 호출 시 `valid:true`(ticket-shop.html의
+정상 입장 경로), 조작된 토큰으로는 `valid:false`(거부 경로) 확인.

@@ -535,3 +535,49 @@ orchestrator | grep -c "\"traceId\":\"$TRACE_ID\""`로 정확 일치 검색이 2
 
 관련 플랜: `.claude-plans/20260725/msa-checkout.md`,
 `.claude-plans/20260725/msa-checkout-gateway-hardening.md` (실행 이력 포함).
+
+### 후속 (2026-08-02) — 실사용 페르소나 화면 + 개발자 콘솔(+ 최초로 AdminEventBus 배선) + receipt.html(실제 목적지 데모)
+
+webhook-relay → waiting-room → live-ranking → order-outbox 순으로 확립한 "메인 화면은
+실사용 페르소나만, 시스템 로그/원시 상태는 개발자 콘솔로, 이 시스템이 실제로 쓰이는 곳은
+완전히 별도 스타일의 데모 앱으로" 컨벤션(`.claude/rules/project/convention.md`)을 다섯 번째
+(마지막)로 이 서비스에 적용(`.claude-plans/20260802/msa-checkout-persona-split.md`).
+
+다른 4개와 달리 이 서비스는 서버 쪽 SSE 로그 스트림(`AdminEventBus`)이 아예 없었다 —
+"이벤트 로그"가 순수 클라이언트 액션 로깅뿐이라 saga의 백그라운드 자동 전이는 로그에 안
+잡혔음. 개발자 콘솔의 "로그" 탭을 다른 서비스처럼 실질적으로 만들기 위해, 이번 라운드에서
+유일하게 작은 백엔드를 추가함(사용자에게 먼저 확인받고 진행):
+
+- `AdminEventsModule.forRoot({path:"admin/logs"})`를 gateway에 추가, `checkout.controller.ts`
+  (체크아웃 시작)/`admin.controller.ts`(재고 리셋) 성공 경로에 `AdminEventBus.emit()` 추가.
+  인가 실패(403)처럼 가드가 핸들러 진입 전에 막는 경우는 서버가 그 사실을 emit할 기회 자체가
+  없어 클라이언트 쪽 기록으로 남음(의도된 동작)
+- **실제 버그를 하나 만들고 바로 잡음**: `AdminEventsModule.forRoot`를 처음엔 루트
+  `GatewayAppModule`에 넣었는데, 이를 주입받는 `CheckoutController`/`AdminController`는
+  형제 모듈인 `GatewayModule` 소속이라 NestJS 모듈 캡슐화 규칙상 DI가 안 닿아 컨테이너
+  부팅이 실패함(`Nest can't resolve dependencies ... FORGE_ADMIN_EVENT_BUS`) — 실제
+  컨테이너 로그로 원인을 확인하고, `AdminEventsModule.forRoot`를 `GatewayModule`(실제
+  컨트롤러들이 있는 모듈)로 옮겨서 해결
+
+- `panel.html`을 "장바구니에서 결제하는 손님" 페르소나로 재구성: 헤더 바 + 고객 로그인 +
+  "체크아웃" 히어로(성공 시 "영수증 보기 →" 링크) + "내 주문 내역"만 메인에 남기고, admin
+  로그인/재고 리셋/인가 실패 재현/다중 인스턴스 경쟁 테스트(동시 체크아웃 2건)는 전부
+  "테스트 도구" 모달로 이동. 이벤트 로그는 `PanelUI.mountDevConsole`(로그 탭 + "재고/saga
+  상태" 탭, 2초 폴링)로 옮겨 메인 화면에서 걷어냈다
+- **신규 `public/receipt.html`** — webhook-relay의 `channel.html`/waiting-room의
+  `ticket-shop.html`/live-ranking의 `broadcast-overlay.html`/order-outbox의
+  `order-status.html`에 대응하는, "이 체크아웃 saga가 실제로 도달하는 곳"을 보여주는 완전히
+  다른 스타일(실제 쇼핑몰 결제완료/영수증 페이지 톤)의 데모. saga 상태를 성공 경로(주문
+  접수→주문 확인→재고 확보→결제 확정)와 실패 경로(주문 접수→주문 확인→주문 취소,
+  `lastError` 표시) 둘 다 타임라인으로 표현. 기존 `GET /checkout/:sagaId`를 그대로
+  재사용(Bearer 토큰은 URL 쿼리로 전달) — 새 API 없음
+
+**검증(2026-08-02)**: 유닛 테스트 22개 회귀 없음. Docker 재빌드(gateway만)·재기동 후 curl로
+(1) 체크아웃→saga CONFIRMED 전이→`GET /checkout/:sagaId` 응답이 receipt.html이 기대하는
+그대로(orderId/reservationId 포함) 반환, (2) 체크아웃 시작/재고 리셋 이벤트가
+`/admin/logs/stream`으로 정확히 방송, (3) customer 토큰으로 admin 리셋 시도 시 403 + 서버
+emit 없음(의도대로), (4) widget-scarce 재고 1개에 동시 체크아웃 2건 → 정확히 1건
+CONFIRMED·1건 CANCELLED(`lastError:"재고가 부족합니다"`)까지 전부 재현 확인.
+
+이걸로 forge-lab 5개 실험 전체(webhook-relay/waiting-room/live-ranking/order-outbox/
+msa-checkout)의 페르소나+개발자콘솔+실제목적지 데모 재개편이 완료됐다.

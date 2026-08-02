@@ -14,6 +14,12 @@ services:
       INVENTORY_SERVICE_URL: inventory-service:50053
       AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-msa-checkout-lab-secret}
       LOG_LEVEL: info
+      # 기본값(20/60초)은 panel.html 하나만 있던 시절 기준 — 이제 panel.html(saga 목록
+      # 폴링) + 개발자 콘솔("재고/saga 상태" 탭, 2초 폴링) + receipt.html이 각자 폴링하는
+      # 구조라, 한 사람이 정상적으로 화면 여러 개를 띄우기만 해도 IP 하나가 금방 20회를
+      # 넘겨 429가 났다(실제 재현 확인). 인가/악의적 폭주 데모 취지는 유지하되, 정상적인
+      # 동시 폴링을 감당할 수 있게 여유를 둔다.
+      RATE_LIMIT_LIMIT: "120"
     depends_on:
       - orchestrator
       - inventory-service
